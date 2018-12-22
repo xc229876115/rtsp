@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <stdint.h>
 #include <sys/socket.h>
 
 #ifdef __cplusplus
@@ -27,7 +27,7 @@ enum H264_FRAME_TYPE {FRAME_TYPE_I, FRAME_TYPE_P, FRAME_TYPE_B};
 
 unsigned int RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload);
 void RtpDelete(unsigned int u32Rtp);
-unsigned int RtpSend(unsigned int u32Rtp, char *pData, int s32DataSize, unsigned int u32TimeStamp);
+unsigned int RtpSend(unsigned int u32Rtp, char *pData, int s32DataSize, unsigned long long u32TimeStamp);
 
 #ifdef __cplusplus
 }

@@ -205,7 +205,7 @@ int tcp_write(int connectSocketId, char *dataBuf, int dataSize)
 }
 
 /*      schedule 相关     */
-stScheList sched[MAX_CONNECTION];
+static stScheList sched[MAX_CONNECTION];
 
 int stop_schedule = 0;//是否退出schedule
 int num_conn = 2;    /*连接个数*/
@@ -230,6 +230,7 @@ int ScheduleInit()
     return 0;
 }
 
+/*负责buffer 数据流发送*/
 void *schedule_do(void *arg)
 {
     int i=0;
@@ -269,14 +270,16 @@ void *schedule_do(void *arg)
         {
             if(sched[i].valid)
             {
+            	printf("start send data , session pause = %d\n",sched[i].rtp_session->pause);
                 if(!sched[i].rtp_session->pause)
                 {
                     //计算时间戳
                     gettimeofday(&now,NULL);
                     mnow = (now.tv_sec*1000 + now.tv_usec/1000);//毫秒
+                    printf("hndRtp is  %p , s32FindNal= %d \n",sched[i].rtp_session->hndRtp,s32FindNal);
                     if((sched[i].rtp_session->hndRtp)&&(s32FindNal))
                     {
-                        //printf("send i frame,length:%d,pointer:%x,timestamp:%lld\n",ringinfo.size,(int)(ringinfo.buffer),mnow);
+                        printf("send i frame,length:%d,pointer:%x,timestamp:%ull\n",ringinfo.size,(int)(ringinfo.buffer),mnow);
                         buflen=ringbuflen;
                         if(ringinfo.frame_type ==FRAME_TYPE_I)
                             sched[i].BeginFrame=1;

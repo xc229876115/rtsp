@@ -125,13 +125,13 @@ unsigned int RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
     hRtp->stServAddr.sin_addr.s_addr = u32IP;
     bzero(&(hRtp->stServAddr.sin_zero), 8);
 
-    //³õÊ¼»¯ĞòºÅ
+    //åˆå§‹åŒ–åºå·
     hRtp->u16SeqNum = 0;
-    //³õÊ¼»¯Ê±¼ä´Á
+    //åˆå§‹åŒ–æ—¶é—´æˆ³
     hRtp->u32TimeStampInc = 0;
     hRtp->u32TimeStampCurr = 0;
 
-    //»ñÈ¡µ±Ç°Ê±¼ä
+    //è·å–å½“å‰æ—¶é—´
     if(gettimeofday(&stTimeval, NULL) == -1)
     {
         printf("Failed to get os time\n");
@@ -142,7 +142,7 @@ unsigned int RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
 
     hRtp->emPayload = emPayload;
 
-    //»ñÈ¡±¾»úÍøÂçÉè±¸Ãû
+    //è·å–æœ¬æœºç½‘ç»œè®¾å¤‡å
     strcpy(stIfr.ifr_name, "eth0");
     if(ioctl(hRtp->s32Sock, SIOCGIFADDR, &stIfr) < 0)
     {
@@ -238,7 +238,7 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
     hRtp->pRtpFixedHdr->u2Version   = 2;
     hRtp->pRtpFixedHdr->u1Marker    = 0;
     hRtp->pRtpFixedHdr->u32SSrc     = hRtp->u32SSrc;
-    //¼ÆËãÊ±¼ä´Á
+    //è®¡ç®—æ—¶é—´æˆ³
     hRtp->pRtpFixedHdr->u32TimeStamp = htonl(hRtp->u32TimeStampCurr * (90000 / 1000));
     //printf("sendnalu264 timestamp:%lld\n",hRtp->u32TimeStampCurr);
     if(gettimeofday(&stTimeval, NULL) == -1)
@@ -248,14 +248,14 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
         goto cleanup;
     }
 
-    //±£´ænaluÊ×byte
+    //ä¿å­˜nalué¦–byte
     u8NaluBytes = *pNalBuf;
-    //ÉèÖÃÎ´·¢ËÍµÄNaluÊı¾İÖ¸ÕëÎ»ÖÃ
+    //è®¾ç½®æœªå‘é€çš„Naluæ•°æ®æŒ‡é’ˆä½ç½®
     pNaluCurr = pNalBuf + 1;
-    //ÉèÖÃÊ£ÓàµÄNaluÊı¾İÊıÁ¿
+    //è®¾ç½®å‰©ä½™çš„Naluæ•°æ®æ•°é‡
     s32NaluRemain = s32NalBufSize - 1;
 
-    //NALU°üĞ¡ÓÚµÈÓÚ×î´ó°ü³¤¶È£¬Ö±½Ó·¢ËÍ
+    //NALUåŒ…å°äºç­‰äºæœ€å¤§åŒ…é•¿åº¦ï¼Œç›´æ¥å‘é€
     if(s32NaluRemain <= MAX_RTP_PKT_LENGTH)
     {
         hRtp->pRtpFixedHdr->u1Marker    = 1;
@@ -278,35 +278,35 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
         fwrite(pSendBuf, s32Bytes, 1, hRtp->pNaluFile);
 #endif
     }
-    //NALU°ü´óÓÚ×î´ó°ü³¤¶È£¬·ÖÅú·¢ËÍ
+    //NALUåŒ…å¤§äºæœ€å¤§åŒ…é•¿åº¦ï¼Œåˆ†æ‰¹å‘é€
     else
     {
-        //Ö¸¶¨fu indicatorÎ»ÖÃ
+        //æŒ‡å®šfu indicatorä½ç½®
         hRtp->pFuInd            = (StFuIndicator *)(pSendBuf + 12);
         hRtp->pFuInd->u1F       = (u8NaluBytes & 0x80) >> 7;
         hRtp->pFuInd->u2Nri     = (u8NaluBytes & 0x60) >> 5;
         hRtp->pFuInd->u5Type    = 28;
 
-        //Ö¸¶¨fu headerÎ»ÖÃ
+        //æŒ‡å®šfu headerä½ç½®
         hRtp->pFuHdr            = (StFuHdr *)(pSendBuf + 13);
         hRtp->pFuHdr->u1R       = 0;
         hRtp->pFuHdr->u5Type    = u8NaluBytes & 0x1f;
 
-        //Ö¸¶¨payloadÎ»ÖÃ
+        //æŒ‡å®špayloadä½ç½®
         pNaluPayload = (pSendBuf + 14);
 
-        //µ±Ê£ÓàNaluÊı¾İ¶àÓÚ0Ê±·ÖÅú·¢ËÍnaluÊı¾İ
+        //å½“å‰©ä½™Naluæ•°æ®å¤šäº0æ—¶åˆ†æ‰¹å‘é€naluæ•°æ®
         while(s32NaluRemain > 0)
         {
-            /*ÅäÖÃfixed header*/
-            //Ã¿¸ö°üĞòºÅÔö1
+            /*é…ç½®fixed header*/
+            //æ¯ä¸ªåŒ…åºå·å¢1
             hRtp->pRtpFixedHdr->u16SeqNum = htons(hRtp->u16SeqNum ++);
             hRtp->pRtpFixedHdr->u1Marker = (s32NaluRemain <= MAX_RTP_PKT_LENGTH) ? 1 : 0;
 
-            /*ÅäÖÃfu header*/
-            //×îºóÒ»ÅúÊı¾İÔòÖÃ1
+            /*é…ç½®fu header*/
+            //æœ€åä¸€æ‰¹æ•°æ®åˆ™ç½®1
             hRtp->pFuHdr->u1E       = (s32NaluRemain <= MAX_RTP_PKT_LENGTH) ? 1 : 0;
-            //µÚÒ»ÅúÊı¾İÔòÖÃ1
+            //ç¬¬ä¸€æ‰¹æ•°æ®åˆ™ç½®1
             hRtp->pFuHdr->u1S       = (s32NaluRemain == (s32NalBufSize - 1)) ? 1 : 0;
 
             s32Bytes = (s32NaluRemain < MAX_RTP_PKT_LENGTH) ? s32NaluRemain : MAX_RTP_PKT_LENGTH;
@@ -314,7 +314,7 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
 
             memcpy(pNaluPayload, pNaluCurr, s32Bytes);
 
-            //·¢ËÍ±¾Åú´Î
+            //å‘é€æœ¬æ‰¹æ¬¡
             s32Bytes = s32Bytes + 14;
             if(sendto(hRtp->s32Sock, pSendBuf, s32Bytes, 0, (struct sockaddr *)&hRtp->stServAddr, sizeof(hRtp->stServAddr)) < 0)
             {
@@ -325,9 +325,9 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
             fwrite(pSendBuf, s32Bytes, 1, hRtp->pNaluFile);
 #endif
 
-            //Ö¸ÏòÏÂÅúÊı¾İ
+            //æŒ‡å‘ä¸‹æ‰¹æ•°æ®
             pNaluCurr += MAX_RTP_PKT_LENGTH;
-            //¼ÆËãÊ£ÓàµÄnaluÊı¾İ³¤¶È
+            //è®¡ç®—å‰©ä½™çš„naluæ•°æ®é•¿åº¦
             s32NaluRemain -= MAX_RTP_PKT_LENGTH;
         }
     }
@@ -361,7 +361,7 @@ static int SendNalu711(HndRtp hRtp, char *buf, int bufsize)
     hRtp->pRtpFixedHdr->u7Payload     = G711;
     hRtp->pRtpFixedHdr->u2Version     = 2;
 
-    hRtp->pRtpFixedHdr->u1Marker = 1;   //±êÖ¾Î»£¬ÓÉ¾ßÌåĞ­Òé¹æ¶¨ÆäÖµ¡£
+    hRtp->pRtpFixedHdr->u1Marker = 1;   //æ ‡å¿—ä½ï¼Œç”±å…·ä½“åè®®è§„å®šå…¶å€¼ã€‚
 
     hRtp->pRtpFixedHdr->u32SSrc = hRtp->u32SSrc;
 
@@ -390,7 +390,7 @@ cleanup:
 **
 **
 **************************************************************************************************/
-unsigned int RtpSend(unsigned int u32Rtp, char *pData, int s32DataSize, unsigned int u32TimeStamp)
+unsigned int RtpSend(unsigned int u32Rtp, char *pData, int s32DataSize, unsigned long long u32TimeStamp)
 {
     int s32NalSize = 0;
     char *pNalBuf, *pDataEnd;
@@ -402,22 +402,22 @@ unsigned int RtpSend(unsigned int u32Rtp, char *pData, int s32DataSize, unsigned
     if(_h264 == hRtp->emPayload)
     {
         pDataEnd = pData + s32DataSize;
-        //ËÑÑ°µÚÒ»¸önaluÆğÊ¼±êÖ¾0x01000000
+        //æœå¯»ç¬¬ä¸€ä¸ªnaluèµ·å§‹æ ‡å¿—0x01000000
         for(; pData < pDataEnd-5; pData ++)
         {
             memcpy(&u32NaluToken, pData, 4 * sizeof(char));
             if(0x01000000 == u32NaluToken)
             {
-                //±ê¼ÇnaluÆğÊ¼Î»ÖÃ
+                //æ ‡è®°naluèµ·å§‹ä½ç½®
                 pData += 4;
                 pNalBuf = pData;
                 break;
             }
         }
-        //·¢ËÍnalu
+        //å‘é€nalu
         for(; pData < pDataEnd-5; pData ++)
         {
-            //ËÑÑ°naluÆğÊ¼±êÖ¾0x01000000£¬ÕÒµ½naluÆğÊ¼Î»ÖÃ£¬·¢ËÍ¸ÃnaluÊı¾İ
+            //æœå¯»naluèµ·å§‹æ ‡å¿—0x01000000ï¼Œæ‰¾åˆ°naluèµ·å§‹ä½ç½®ï¼Œå‘é€è¯¥naluæ•°æ®
             memcpy(&u32NaluToken, pData, 4 * sizeof(char));
             if(0x01000000 == u32NaluToken)
             {
@@ -427,7 +427,7 @@ unsigned int RtpSend(unsigned int u32Rtp, char *pData, int s32DataSize, unsigned
                     return -1;
                 }
 
-                //±ê¼ÇnaluÆğÊ¼Î»ÖÃ
+                //æ ‡è®°naluèµ·å§‹ä½ç½®
                 pData += 4;
                 pNalBuf = pData;
             }

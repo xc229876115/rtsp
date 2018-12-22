@@ -4,19 +4,19 @@
 #include<ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include "ringfifo.h"
 #include "rtputils.h"
-#include "sample_comm.h"
 #define NMAX 32
 
-int iput = 0; /* »·ĞÎ»º³åÇøµÄµ±Ç°·ÅÈëÎ»ÖÃ */
-int iget = 0; /* »º³åÇøµÄµ±Ç°È¡³öÎ»ÖÃ */
-int n = 0; /* »·ĞÎ»º³åÇøÖĞµÄÔªËØ×ÜÊıÁ¿ */
-
+int iput = 0; /* ç¯å½¢ç¼“å†²åŒºçš„å½“å‰æ”¾å…¥ä½ç½® */
+int iget = 0; /* ç¼“å†²åŒºçš„å½“å‰å–å‡ºä½ç½® */
+int n = 0; /* ç¯å½¢ç¼“å†²åŒºä¸­çš„å…ƒç´ æ€»æ•°é‡ */
+static int verbose = 0;
 struct ringbuf ringfifo[NMAX];
 extern int UpdateSpsOrPps(unsigned char *data,int frame_type,int len);
-/* »·ĞÎ»º³åÇøµÄµØÖ·±àºÅ¼ÆËãº¯Êı£¬Èç¹ûµ½´ï»½ĞÑ»º³åÇøµÄÎ²²¿£¬½«ÈÆ»Øµ½Í·²¿¡£
-»·ĞÎ»º³åÇøµÄÓĞĞ§µØÖ·±àºÅÎª£º0µ½(NMAX-1)
+/* ç¯å½¢ç¼“å†²åŒºçš„åœ°å€ç¼–å·è®¡ç®—å‡½æ•°ï¼Œå¦‚æœåˆ°è¾¾å”¤é†’ç¼“å†²åŒºçš„å°¾éƒ¨ï¼Œå°†ç»•å›åˆ°å¤´éƒ¨ã€‚
+ç¯å½¢ç¼“å†²åŒºçš„æœ‰æ•ˆåœ°å€ç¼–å·ä¸ºï¼š0åˆ°(NMAX-1)
 */
 void ringmalloc(int size)
 {
@@ -28,9 +28,9 @@ void ringmalloc(int size)
         ringfifo[i].frame_type = 0;
        // printf("FIFO INFO:idx:%d,len:%d,ptr:%x\n",i,ringfifo[i].size,(int)(ringfifo[i].buffer));
     }
-    iput = 0; /* »·ĞÎ»º³åÇøµÄµ±Ç°·ÅÈëÎ»ÖÃ */
-    iget = 0; /* »º³åÇøµÄµ±Ç°È¡³öÎ»ÖÃ */
-    n = 0; /* »·ĞÎ»º³åÇøÖĞµÄÔªËØ×ÜÊıÁ¿ */
+    iput = 0; /* ç¯å½¢ç¼“å†²åŒºçš„å½“å‰æ”¾å…¥ä½ç½® */
+    iget = 0; /* ç¼“å†²åŒºçš„å½“å‰å–å‡ºä½ç½® */
+    n = 0; /* ç¯å½¢ç¼“å†²åŒºä¸­çš„å…ƒç´ æ€»æ•°é‡ */
 }
 /**************************************************************************************************
 **
@@ -39,9 +39,9 @@ void ringmalloc(int size)
 **************************************************************************************************/
 void ringreset()
 {
-    iput = 0; /* »·ĞÎ»º³åÇøµÄµ±Ç°·ÅÈëÎ»ÖÃ */
-    iget = 0; /* »º³åÇøµÄµ±Ç°È¡³öÎ»ÖÃ */
-    n = 0; /* »·ĞÎ»º³åÇøÖĞµÄÔªËØ×ÜÊıÁ¿ */
+    iput = 0; /* ç¯å½¢ç¼“å†²åŒºçš„å½“å‰æ”¾å…¥ä½ç½® */
+    iget = 0; /* ç¼“å†²åŒºçš„å½“å‰å–å‡ºä½ç½® */
+    n = 0; /* ç¯å½¢ç¼“å†²åŒºä¸­çš„å…ƒç´ æ€»æ•°é‡ */
 }
 /**************************************************************************************************
 **
@@ -74,7 +74,7 @@ int addring(int i)
 **
 **
 **************************************************************************************************/
-/* ´Ó»·ĞÎ»º³åÇøÖĞÈ¡Ò»¸öÔªËØ */
+/* ä»ç¯å½¢ç¼“å†²åŒºä¸­å–ä¸€ä¸ªå…ƒç´  */
 
 int ringget(struct ringbuf *getinfo)
 {
@@ -101,7 +101,7 @@ int ringget(struct ringbuf *getinfo)
 **
 **
 **************************************************************************************************/
-/* Ïò»·ĞÎ»º³åÇøÖĞ·ÅÈëÒ»¸öÔªËØ*/
+/* å‘ç¯å½¢ç¼“å†²åŒºä¸­æ”¾å…¥ä¸€ä¸ªå…ƒç´ */
 void ringput(unsigned char *buffer,int size,int encode_type)
 {
 
@@ -125,6 +125,7 @@ void ringput(unsigned char *buffer,int size,int encode_type)
 **
 **
 **************************************************************************************************/
+#if 0
 HI_S32 HisiPutH264DataToBuffer(VENC_STREAM_S *pstStream)
 {
 	HI_S32 i,j;
@@ -181,3 +182,166 @@ HI_S32 HisiPutH264DataToBuffer(VENC_STREAM_S *pstStream)
 
 	return HI_SUCCESS;
 }
+#endif
+
+void hexdump(uint8_t *data , int size)
+{
+	int i;
+	for(i=0;i<size;i++){
+		printf("%02x ",data[i]);
+	}
+	printf("\n");
+	return;
+}
+
+typedef struct _NaluUnit
+{
+	int type;
+    int size;
+	unsigned char *data;
+}NaluUnit;
+
+
+int ReadOneNaluFromBuf(NaluUnit *nalu,unsigned char *buf, unsigned int size)
+{
+	unsigned int  nalhead_pos = 0;
+	int nal_offset=nalhead_pos;
+	int one_nalu = 1; //æœ¬åœ°è¯»å–bufæ˜¯å¦åŒ…å«å¤šä¸ªnal
+	int nal_head = 0;
+	
+	if(size < 4)
+	{
+		printf("buf size is too small %d\n",size);
+		return 0;
+	}
+
+	memset(nalu,0,sizeof(NaluUnit));
+	while(nalhead_pos + 4 <size)
+	{
+		//search for nal header ï¼ŒNALU å•å…ƒçš„å¼€å§‹, å¿…é¡»æ˜¯ "00 00 00 01" æˆ– "00 00 01",
+				// find next nal header 00 00 00 01 to calu the length of last nal
+		if(buf[nalhead_pos++] == 0x00 &&
+			buf[nalhead_pos++] == 0x00 &&
+				buf[nalhead_pos++] == 0x00 &&
+					buf[nalhead_pos++] == 0x01)
+		{
+			nal_head = 1;
+		}
+		else
+		{
+			continue;
+		}
+		//search for nal tail which is also the head of next nal
+		nal_offset = nalhead_pos;
+		while (nal_offset + 4 < size)
+		{
+			// find next nal header 00 00 00 01 to calu the length of last nal
+			if(buf[nal_offset++] == 0x00 &&
+				buf[nal_offset++] == 0x00 &&
+					buf[nal_offset++] == 0x00 &&
+						buf[nal_offset++] == 0x01)
+			{
+				nalu->size = (nal_offset-4)-nalhead_pos; //nalå¤´4ä¸ªå­—èŠ‚
+				one_nalu = 0;
+				break;
+			}
+			else
+				continue;
+
+		}
+		if(one_nalu)
+		{
+			nal_offset = size;
+			nalu->size = nal_offset-nalhead_pos; //nalå¤´4ä¸ªå­—èŠ‚
+		}
+		nalu->type = buf[nalhead_pos]&0x1f; 	// 7-> pps , 8->sps
+		if(nalu->size)
+		{
+			nalu->data= (unsigned char *)malloc(nalu->size);
+			if(nalu->data)
+				memcpy(nalu->data,buf+nalhead_pos,nalu->size);
+			else
+				printf("malloc for nal data err %s\n",strerror(errno));
+		}
+
+		nalhead_pos =(one_nalu==1) ? nal_offset:(nal_offset-4);
+		break;
+	}
+
+	return nalhead_pos;
+}
+
+void extract_spspps(uint8_t *data , int size )
+{
+	NaluUnit naluUnit = {0};
+	int offset = 0;
+	int ret;
+
+	static int update_flag = 0;
+	if(update_flag == 2)
+		return;
+	
+	while(ret = ReadOneNaluFromBuf(&naluUnit,data+offset,size-offset))
+	{
+		if(verbose)
+			printf("Nal type -> %d\n",naluUnit.type);
+		if(naluUnit.type == 7)  // 7-> pps , 8->sps
+		{
+			UpdatePps(naluUnit.data,naluUnit.size);
+			update_flag ++;
+			if(verbose)
+			{			
+				printf("pps frame info is :\n");
+				hexdump(naluUnit.data,naluUnit.size);
+			}
+			
+		}else if(naluUnit.type == 8)
+		{	
+			update_flag ++;
+			UpdateSps(naluUnit.data,naluUnit.size);
+			if(verbose)
+			{
+				printf("sps frame info is :\n");
+				hexdump(naluUnit.data,naluUnit.size);
+			}
+		}
+		
+		if(naluUnit.data)
+			free(naluUnit.data);
+		
+		memset(&naluUnit,0,sizeof(NaluUnit));
+		offset += ret;
+		if(offset >= size)
+			break;
+	}
+
+	return ;
+}
+
+int PutH264DataToBuffer(uint8_t *data , int size , int iframe)
+{
+	int32_t i,j;
+	int32_t len=0,off=0,len2=2;
+	unsigned char *pstr;
+
+    if(n<NMAX)
+    {
+		memcpy(ringfifo[iput].buffer,data,size);
+        ringfifo[iput].size= size;
+		if(iframe)
+		{
+			ringfifo[iput].frame_type = FRAME_TYPE_I;
+
+			extract_spspps(data,size);
+		}
+        	
+		else
+			ringfifo[iput].frame_type = FRAME_TYPE_P;
+
+        iput = addring(iput);
+        n++;
+    }
+
+	return 0;
+}
+

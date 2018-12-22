@@ -5,6 +5,10 @@
 #define RTSP_DEBUG 1
 #define RTP_DEFAULT_PORT 5004
 
+void PrefsInit();
+void RTP_port_pool_init(int port);
+void EventLoop(int s32MainFd);
+
 void CallBackNotifyRtspExit(char s8IsExit);
 void *ThreadRtsp(void *pArgs);
 int rtsp_server(RTSP_buffer *rtsp);

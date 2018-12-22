@@ -81,7 +81,7 @@ void PrefsInit()
 **
 **
 **************************************************************************************************/
-//为缓冲分配空间
+//客户端session并配空间并初始化 ，填充句柄
 void RTSP_initserver(RTSP_buffer *rtsp, int fd)
 {
     rtsp->fd = fd;
@@ -387,7 +387,6 @@ int RTSP_validate_method(RTSP_buffer * pRtsp)
     *method = *object = '\0';
     seq = 0;
 
-	printf("");
     /*按照请求消息的格式解析消息的第一行*/
 //    if ( (pcnt = sscanf(pRtsp->in_buffer, " %31s %255s %31s\n%15s", method, object, ver, hdr, &seq)) != 5){
 	if ( (pcnt = sscanf(pRtsp->in_buffer, " %31s %255s %31s\n%15s", method, object, ver, hdr)) != 4){
@@ -491,7 +490,7 @@ int ParseUrl(const char *pUrl, char *pServer, unsigned short *port, char *pFileN
         		strncpy(pSubPort, pPort+1, pSuffix-pPort-1);
         		pSubPort[pSuffix-pPort-1] = '\0';
         		*port = (unsigned short) atol(pSubPort);
-				printf("port:%d\n",port);
+				printf("port:%d\n",*port);
         	}
         	else
         	{
@@ -587,11 +586,11 @@ void GetSdpDescr(RTSP_buffer * pRtsp, char *pDescr, char *s8Str)
 	struct ifreq stIfr;
 	char pSdpId[128];
 	char rtp_port[5];
-	strcpy(stIfr.ifr_name, "eth0");
+	strcpy(stIfr.ifr_name, "ens33");
 	if(ioctl(pRtsp->fd, SIOCGIFADDR, &stIfr) < 0)
 	{
 		//printf("Failed to get host eth0 ip\n");
-		strcpy(stIfr.ifr_name, "wlan0");
+		strcpy(stIfr.ifr_name, "ens33");
 		if(ioctl(pRtsp->fd, SIOCGIFADDR, &stIfr) < 0)
 		{
 			printf("Failed to get host eth0 or wlan0 ip\n");
@@ -610,7 +609,7 @@ void GetSdpDescr(RTSP_buffer * pRtsp, char *pDescr, char *s8Str)
 	strcat(pDescr, s8Str);
 
 	strcat(pDescr, "\r\n");
-	strcat(pDescr, "s=Unnamed\r\n");
+	strcat(pDescr, "s=xucheng rtsp server\r\n");
 	strcat(pDescr, "i=N/A\r\n");
 
    	strcat(pDescr, "c=");
@@ -621,7 +620,7 @@ void GetSdpDescr(RTSP_buffer * pRtsp, char *pDescr, char *s8Str)
 	strcat(pDescr, "\r\n");
 	
    	strcat(pDescr, "t=0 0\r\n");	
-	strcat(pDescr, "a=recvonly\r\n");
+	strcat(pDescr, "a=range:npt=0-\r\n");
 	/**** media specific ****/
 	strcat(pDescr,"m=");
 	strcat(pDescr,"video ");
@@ -639,11 +638,11 @@ void GetSdpDescr(RTSP_buffer * pRtsp, char *pDescr, char *s8Str)
 		strcat(pDescr,"a=fmtp:96 packetization-mode=1;");
 		strcat(pDescr,"profile-level-id=");
 		strcat(pDescr,psp.base64profileid);
-		strcat(pDescr,";sprop-parameter-sets=");
-		strcat(pDescr,psp.base64sps);
-		strcat(pDescr,",");
-		strcat(pDescr,psp.base64pps);
-		strcat(pDescr,";");
+//		strcat(pDescr,";sprop-parameter-sets=");
+//		strcat(pDescr,psp.base64sps);
+//		strcat(pDescr,",");
+//		strcat(pDescr,psp.base64pps);
+//		strcat(pDescr,";");
 		strcat(pDescr, "\r\n");
 		strcat(pDescr,"a=control:trackID=0");
 		strcat(pDescr, "\r\n");
@@ -899,7 +898,7 @@ int send_setup_reply(RTSP_buffer *pRtsp, RTSP_session *pSession, RTP_session *pR
 			}
 			else
 			{
-				sprintf(s8Str + strlen(s8Str), "RTP/AVP;unicast;client_port=%d-%d;destination=192.168.245.65;source=%s;server_port=", \
+				sprintf(s8Str + strlen(s8Str), "RTP/AVP/UDP;unicast;client_port=%d-%d;destination=192.168.245.65;source=%s;server_port=", \
 						pRtpSes->transport.u.udp.cli_ports.RTP, pRtpSes->transport.u.udp.cli_ports.RTCP,"192.168.245.96");
 			}
 
@@ -1019,7 +1018,7 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 
 				//建立RTP套接字
 				rtp_s->hndRtp = (struct _tagStRtpHandle*)RtpCreate((unsigned int)(((struct sockaddr_in *)(&pRtsp->stClientAddr))->sin_addr.s_addr), Transport.u.udp.cli_ports.RTP, _h264nalu);
-				printf("<><><><>Creat RTP<><><><>\n");
+				printf("<><><><>Creat RTP %p<><><><>\n",rtp_s->hndRtp);
 
 				Transport.u.udp.is_multicast = 0;
 			}
@@ -1739,7 +1738,7 @@ int RtspServer(RTSP_buffer *rtsp)
 	return ERR_NOERROR;
 }
 /**************************************************************************************************
-**
+** 管理客户端链表，处理每个客户端的请求
 **
 **
 **************************************************************************************************/
@@ -1865,7 +1864,7 @@ void EventLoop(int s32MainFd)
 //	static unsigned int s32ChdCnt=0;
 	static int s32ConCnt = 0;//已经连接的客户端数
 	int s32Fd = -1;
-	static RTSP_buffer *pRtspList=NULL;
+	static RTSP_buffer *pRtspList=NULL; // 链表管理客户
 	RTSP_buffer *p=NULL;
 	unsigned int u32FdFound;
 
@@ -2035,14 +2034,14 @@ void UpdateSps(unsigned char *data,int len)
 void UpdatePps(unsigned char *data,int len)
 {
 	int i;
-	if(len>21)
-		return ;
+	
 	#if 0
 	base64_encode((unsigned char *)data, psp.base64pps, len);//pps
 	#else
 	char pic1_paramBase64[512] = {0};
 	base64_encode2(data, len, psp.base64pps, 512);
 	#endif
+	printf("len is %d , base64 pps is %s\n",len,psp.base64pps);
 
 }
 

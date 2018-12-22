@@ -185,7 +185,7 @@ typedef struct _play_args
     float end_time;                                     /*结束时间*/
 } stPlayArgs;
 
-typedef unsigned int (*RTP_play_action)(unsigned int u32Rtp, char *pData, int s32DataSize, unsigned int u32TimeStamp);
+typedef unsigned int (*RTP_play_action)(unsigned int u32Rtp, char *pData, int s32DataSize, unsigned long long u32TimeStamp);
 
 typedef struct _schedule_list
 {
@@ -218,7 +218,7 @@ typedef enum
 
 
 /* Define default RTSP listening port */
-#define SERVER_RTSP_PORT_DEFAULT 6880
+#define SERVER_RTSP_PORT_DEFAULT 8554
 
 typedef struct _StServPrefs {
     char hostname[256];
