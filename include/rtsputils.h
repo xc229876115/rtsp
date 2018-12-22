@@ -185,7 +185,7 @@ typedef struct _play_args
     float end_time;                                     /*结束时间*/
 } stPlayArgs;
 
-typedef unsigned int (*RTP_play_action)(unsigned int u32Rtp, char *pData, int s32DataSize, unsigned long long u32TimeStamp);
+typedef unsigned int (*RTP_play_action)(void *Rtp, char *pData, int s32DataSize, unsigned long long u32TimeStamp);
 
 typedef struct _schedule_list
 {

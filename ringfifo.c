@@ -7,12 +7,12 @@
 #include <errno.h>
 #include "ringfifo.h"
 #include "rtputils.h"
+#include "rtspservice.h"
 #define NMAX 32
 
 int iput = 0; /* 环形缓冲区的当前放入位置 */
 int iget = 0; /* 缓冲区的当前取出位置 */
 int n = 0; /* 环形缓冲区中的元素总数量 */
-static int verbose = 0;
 struct ringbuf ringfifo[NMAX];
 extern int UpdateSpsOrPps(unsigned char *data,int frame_type,int len);
 /* 环形缓冲区的地址编号计算函数，如果到达唤醒缓冲区的尾部，将绕回到头部。
@@ -207,7 +207,6 @@ int ReadOneNaluFromBuf(NaluUnit *nalu,unsigned char *buf, unsigned int size)
 	unsigned int  nalhead_pos = 0;
 	int nal_offset=nalhead_pos;
 	int one_nalu = 1; //本地读取buf是否包含多个nal
-	int nal_head = 0;
 	
 	if(size < 4)
 	{
@@ -225,7 +224,6 @@ int ReadOneNaluFromBuf(NaluUnit *nalu,unsigned char *buf, unsigned int size)
 				buf[nalhead_pos++] == 0x00 &&
 					buf[nalhead_pos++] == 0x01)
 		{
-			nal_head = 1;
 		}
 		else
 		{
@@ -281,29 +279,30 @@ void extract_spspps(uint8_t *data , int size )
 	if(update_flag == 2)
 		return;
 	
-	while(ret = ReadOneNaluFromBuf(&naluUnit,data+offset,size-offset))
+	while((ret = ReadOneNaluFromBuf(&naluUnit,data+offset,size-offset)))
 	{
-		if(verbose)
-			printf("Nal type -> %d\n",naluUnit.type);
+#ifdef DEBUG
+		printf("Nal type -> %d\n",naluUnit.type);
+#endif
 		if(naluUnit.type == 7)  // 7-> pps , 8->sps
 		{
 			UpdatePps(naluUnit.data,naluUnit.size);
 			update_flag ++;
-			if(verbose)
-			{			
-				printf("pps frame info is :\n");
-				hexdump(naluUnit.data,naluUnit.size);
-			}
+#ifdef DEBUG
+			printf("pps frame info is :\n");
+			hexdump(naluUnit.data,naluUnit.size);
+#endif
+			printf("update pps done\n");
 			
 		}else if(naluUnit.type == 8)
 		{	
 			update_flag ++;
 			UpdateSps(naluUnit.data,naluUnit.size);
-			if(verbose)
-			{
-				printf("sps frame info is :\n");
-				hexdump(naluUnit.data,naluUnit.size);
-			}
+#ifdef DEBUG
+			printf("sps frame info is :\n");
+			hexdump(naluUnit.data,naluUnit.size);
+#endif
+			printf("update sps done\n");
 		}
 		
 		if(naluUnit.data)
@@ -320,9 +319,6 @@ void extract_spspps(uint8_t *data , int size )
 
 int PutH264DataToBuffer(uint8_t *data , int size , int iframe)
 {
-	int32_t i,j;
-	int32_t len=0,off=0,len2=2;
-	unsigned char *pstr;
 
     if(n<NMAX)
     {

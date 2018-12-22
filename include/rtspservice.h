@@ -7,7 +7,7 @@
 
 void PrefsInit();
 void RTP_port_pool_init(int port);
-void EventLoop(int s32MainFd);
+int EventLoop(int s32MainFd);
 
 void CallBackNotifyRtspExit(char s8IsExit);
 void *ThreadRtsp(void *pArgs);

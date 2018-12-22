@@ -43,7 +43,7 @@ char *sock_ntop_host(const struct sockaddr *sa, socklen_t salen, char *str, size
 int tcp_accept(int fd)
 {
     int f;
-    struct sockaddr_storage addr;
+     struct sockaddr_in addr;;
     socklen_t addrlen = sizeof(addr);
 
     memset(&addr,0,sizeof(addr));
@@ -52,12 +52,16 @@ int tcp_accept(int fd)
     /*接收连接，创建一个新的socket,返回其描述符*/
     f = accept(fd, (struct sockaddr *)&addr, &addrlen);
 
+	if(f)
+	    printf("New Client %s fd = %d is connected !\n",inet_ntoa(addr.sin_addr),f);
+
     return f;
 }
 
 void tcp_close(int s)
 {
-    close(s);
+	if(s)
+	    close(s);
 }
 
 int tcp_connect(unsigned short port, char *addr)
@@ -236,15 +240,9 @@ void *schedule_do(void *arg)
     int i=0;
     struct timeval now;
     unsigned long long mnow;
-    char *pDataBuf, *pFindNal;
-    unsigned int ringbuffer;
     struct timespec ts = {0,33333};
-    int s32FileId;
-    unsigned int u32NaluToken;
-    char *pNalStart=NULL;
-    int s32NalSize;
     int s32FindNal = 0;
-    int buflen=0,ringbuflen=0,ringbuftype;
+    int ringbuflen=0;
     struct ringbuf ringinfo;
 //=====================
 #ifdef RTSP_DEBUG
@@ -270,21 +268,27 @@ void *schedule_do(void *arg)
         {
             if(sched[i].valid)
             {
-            	printf("start send data , session pause = %d\n",sched[i].rtp_session->pause);
+#ifdef DEBUG
+	           	printf("start send data , session pause = %d\n",sched[i].rtp_session->pause);
+#endif
                 if(!sched[i].rtp_session->pause)
                 {
                     //计算时间戳
                     gettimeofday(&now,NULL);
                     mnow = (now.tv_sec*1000 + now.tv_usec/1000);//毫秒
-                    printf("hndRtp is  %p , s32FindNal= %d \n",sched[i].rtp_session->hndRtp,s32FindNal);
+#ifdef DEBUG
+	                printf("hndRtp is  %p , s32FindNal= %d \n",sched[i].rtp_session->hndRtp,s32FindNal);
+#endif
                     if((sched[i].rtp_session->hndRtp)&&(s32FindNal))
                     {
-                        printf("send i frame,length:%d,pointer:%x,timestamp:%ull\n",ringinfo.size,(int)(ringinfo.buffer),mnow);
-                        buflen=ringbuflen;
+		
+#ifdef DEBUG
+						printf("send i frame,length:%d,pointer:%x,timestamp:%ull\n",ringinfo.size,(int)(ringinfo.buffer),mnow);
+#endif
                         if(ringinfo.frame_type ==FRAME_TYPE_I)
                             sched[i].BeginFrame=1;
                         //if(sched[i].BeginFrame== 1)
-                            sched[i].play_action((unsigned int)(sched[i].rtp_session->hndRtp), ringinfo.buffer, ringinfo.size, mnow);
+                            sched[i].play_action((sched[i].rtp_session->hndRtp), (char *)ringinfo.buffer, ringinfo.size, mnow);
                     }
                 }
             }
@@ -295,7 +299,6 @@ void *schedule_do(void *arg)
     }
     while(!stop_schedule);
 
-cleanup:
 
     //free(pDataBuf);
     //close(s32FileId);
@@ -400,7 +403,7 @@ int send_reply(int err, char *addon, RTSP_buffer * rtsp)
         fprintf(stderr,"send_reply(): memory allocation error.\n");
         return ERR_ALLOC;
     }
-    memset(b, 0, sizeof(b));
+    memset(b, 0, len);
     /*按照协议格式填充数据*/
     sprintf(b, "%s %d %s"RTSP_EL"CSeq: %d"RTSP_EL, RTSP_VER, err, get_stat(err), rtsp->rtsp_cseq);
     strcat(b, RTSP_EL);

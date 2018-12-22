@@ -1331,7 +1331,7 @@ int RTSP_teardown(RTSP_buffer * pRtsp)
 		pRtpSesn = pRtpSesn->next;
 
 		//删除RTP视频发送
-		RtpDelete((unsigned int)pRtpSesnTemp->hndRtp);
+		RtpDelete(pRtpSesnTemp->hndRtp);
 		//删除schedule中对应id
 		schedule_remove(pRtpSesnTemp->sched_id);
 		//全局变量播放总数减一，如果为0则不播放
@@ -1341,7 +1341,7 @@ int RTSP_teardown(RTSP_buffer * pRtsp)
 	if (g_s32DoPlay == 0) 
 	{
 		printf("no user online now resetfifo\n");
-		ringreset;
+		ringreset();
 		/* 重新将所有可用的RTP端口号放入到port_pool[MAX_SESSION] 中 */
 		RTP_port_pool_init(RTP_DEFAULT_PORT);
 	}
@@ -1689,7 +1689,7 @@ int RtspServer(RTSP_buffer *rtsp)
 		}
 
 #ifdef RTSP_DEBUG
-		fprintf(stderr,"INPUT_BUFFER was:%s\n", buffer);
+		fprintf(stderr,":%s\n", buffer);
 #endif
 
 		/*填充数据*/
@@ -1742,15 +1742,11 @@ int RtspServer(RTSP_buffer *rtsp)
 **
 **
 **************************************************************************************************/
-void ScheduleConnections(RTSP_buffer **rtsp_list, int *conn_count)
+void ScheduleConnections(RTSP_buffer **rtsp_list)
 {
     int res;
     RTSP_buffer *pRtsp=*rtsp_list,*pRtspN=NULL;
     RTP_session *r=NULL, *t=NULL;
-
-#ifdef RTSP_DEBUG
-//    fprintf(stderr, "%s\n", __FUNCTION__);
-#endif
 
     while (pRtsp!=NULL)
     {
@@ -1772,7 +1768,7 @@ void ScheduleConnections(RTSP_buffer **rtsp_list, int *conn_count)
                     while (r!=NULL)
                     {
                         t = r->next;
-                        RtpDelete((unsigned int)(r->hndRtp));
+                        RtpDelete((r->hndRtp));
                         schedule_remove(r->sched_id);
                         r=t;
                     }
@@ -1785,7 +1781,7 @@ void ScheduleConnections(RTSP_buffer **rtsp_list, int *conn_count)
 					if (g_s32DoPlay == 0) 
 					{
 						printf("user abort! no user online now resetfifo\n");
-						ringreset;
+						ringreset();
 						/* 重新将所有可用的RTP端口号放入到port_pool[MAX_SESSION] 中 */
 						RTP_port_pool_init(RTP_DEFAULT_PORT);
 					}
@@ -1794,7 +1790,6 @@ void ScheduleConnections(RTSP_buffer **rtsp_list, int *conn_count)
 
                 // wait for
                 close(pRtsp->fd);
-                --*conn_count;
                 num_conn--;
 
                 /*释放rtsp缓冲区*/
@@ -1817,12 +1812,6 @@ void ScheduleConnections(RTSP_buffer **rtsp_list, int *conn_count)
 					printf("current next fd:%d\n",pRtsp->fd);
                 }
 
-                /*适当情况下，释放调度器本身*/
-                if (pRtsp==NULL && *conn_count<0)
-                {
-                	fprintf(stderr,"to stop cchedule_do thread\n");
-                    stop_schedule=1;
-                }
             }
             else
             {	
@@ -1854,34 +1843,45 @@ void RTP_port_pool_init(int port)
     	s_uPortPool[i] = i+s_u32StartPort;
     }
 }
-/**************************************************************************************************
-**
-**
-**
-**************************************************************************************************/
-void EventLoop(int s32MainFd)
+
+static RTSP_buffer *pRtspList=NULL; // 链表管理客户
+static int s32ConCnt = 0;//已经连接的客户端数
+static pthread_mutex_t lock ;
+void *ScheduleConnection_Proc(void *arg)
 {
-//	static unsigned int s32ChdCnt=0;
-	static int s32ConCnt = 0;//已经连接的客户端数
-	int s32Fd = -1;
-	static RTSP_buffer *pRtspList=NULL; // 链表管理客户
-	RTSP_buffer *p=NULL;
-	unsigned int u32FdFound;
-
-//	printf("%s\n", __FUNCTION__);
-	/*接收连接，创建一个新的socket*/
-	if (s32ConCnt!=-1)
+	struct timespec ts = { 0, 0 };
+	ts.tv_nsec = 10000000;		/* nanoseconds */
+	
+	int Clients=0;
+	while(!g_s32Quit)
 	{
-		s32Fd= tcp_accept(s32MainFd);
-	}
+		pthread_mutex_lock(&lock);
+		Clients = s32ConCnt;
+		pthread_mutex_unlock(&lock);
 
+		if(Clients)
+		{
+			/*对已有的连接进行调度*/
+			ScheduleConnections(&pRtspList);
+		}
+		nanosleep(&ts, NULL);	
+	}
+	return (void *)0;
+}
+
+int HandleClientConnection(int clientfd)
+{
+	unsigned int u32FdFound;
+	RTSP_buffer *p=NULL;
+	
+	
 	/*处理新创建的连接*/
-	if (s32Fd >= 0)
+	if (clientfd >= 0)
 	{
 		/*查找列表中是否存在此连接的socket*/
 		for (u32FdFound=0,p=pRtspList; p!=NULL; p=p->next)
 		{
-			if (p->fd == s32Fd)
+			if (p->fd == clientfd)
 			{
 				u32FdFound=1;
 				break;
@@ -1892,22 +1892,92 @@ void EventLoop(int s32MainFd)
 			/*创建一个连接，增加一个客户端*/
 			if (s32ConCnt<MAX_CONNECTION)
 			{
+				pthread_mutex_lock(&lock);
 				++s32ConCnt;
-				AddClient(&pRtspList,s32Fd);
+				AddClient(&pRtspList,clientfd);
+				pthread_mutex_unlock(&lock);
 			}
 			else
 			{
 				fprintf(stderr, "exceed the MAX client, ignore this connecting\n");
-				return;
+				return -1;
 			}
 			num_conn++;
 			fprintf(stderr, "%s Connection reached: %d\n", __FUNCTION__, num_conn);
 		}
 	}
 
-	/*对已有的连接进行调度*/
-	//printf("7\r\n");
-	ScheduleConnections(&pRtspList,&s32ConCnt);
+	return 0;
+}
+/**************************************************************************************************
+**
+**
+**
+**************************************************************************************************/
+int EventLoop(int s32MainFd)
+{
+//	static unsigned int s32ChdCnt=0;
+	int ret;
+	fd_set rset,errset;		/*读写I/O描述集*/
+	struct timeval tv;
+
+	
+	pthread_mutex_init(&lock,NULL);
+	/*用于数据流分发*/
+	pthread_t tid;
+	if(pthread_create(&tid,NULL,ScheduleConnection_Proc,NULL) < 0)
+	{
+		fprintf(stderr,"pthread_create ScheduleConnection_Proc error:%s\n",strerror(errno));
+		return -1;
+	}
+
+	while(!g_s32Quit)
+	{
+
+		/*变量初始化*/
+		FD_ZERO(&rset);
+		FD_SET(s32MainFd,&rset);
+
+		FD_ZERO(&errset);
+		FD_SET(s32MainFd,&errset);
+		tv.tv_sec  =2; 	/*select 时间间隔*/
+		tv.tv_usec =0;
+
+		printf("start New selcet\n");
+		/*调用select等待对应描述符变化*/
+		ret = select(s32MainFd+1,&rset,0,&errset,&tv);
+		switch(ret)
+		{
+			case -1:
+				fprintf(stderr,"select error %s %d : %s\n", __FILE__, __LINE__,strerror(errno));
+				return ERR_GENERIC; //errore interno al server
+			case 0:
+#ifdef DEBUG
+				printf("%s %d select timeout \n",__FILE__, __LINE__);
+#endif	
+				break;
+			default:
+				/*套接字可读*/
+				if(FD_ISSET(s32MainFd,&rset))
+				{
+					/*接收连接，创建一个新的socket*/
+					int s32Fd= tcp_accept(s32MainFd);
+					HandleClientConnection(s32Fd);
+				}
+
+				/*套接字出错*/
+				if(FD_ISSET(s32MainFd,&errset))
+				{
+					printf("fd is error :%s\n",strerror(errno));
+					return -1;
+				}
+				break;
+		}
+
+	}
+
+	printf("Eventloop normal exit\n");
+	return 0;
 }
 /**************************************************************************************************
 **
@@ -1975,8 +2045,8 @@ void base64_encode2(char *in, const int in_len, char *out, int out_len)
 	static const char *codes ="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 	int base64_len = 4 * ((in_len+2)/3);
-	//if(out_len >= base64_len)
-	//	printf("out_len >= base64_len\n");
+	if(out_len >= base64_len)
+		printf("out_len >= base64_len\n");
 	char *p = out;
 	int times = in_len / 3;
 	int i;
@@ -2012,7 +2082,6 @@ void base64_encode2(char *in, const int in_len, char *out, int out_len)
 **************************************************************************************************/
 void UpdateSps(unsigned char *data,int len)
 {
-	int i;
 	if(len>21)
 		return ;
 
@@ -2022,7 +2091,7 @@ void UpdateSps(unsigned char *data,int len)
 	base64_encode((unsigned char *)data, psp.base64sps, len);///sps
 	#else
 	//a=fmtp:96 packetization-mode=1;profile-level-id=ee69bc;sprop-parameter-sets=xu5pvGeDzEef,qFT3dm==;
-	base64_encode2(data, len, psp.base64sps, 512);
+	base64_encode2((char *)data, len, psp.base64sps, 512);
 	#endif
 
 }
@@ -2033,15 +2102,12 @@ void UpdateSps(unsigned char *data,int len)
 **************************************************************************************************/
 void UpdatePps(unsigned char *data,int len)
 {
-	int i;
 	
 	#if 0
 	base64_encode((unsigned char *)data, psp.base64pps, len);//pps
 	#else
-	char pic1_paramBase64[512] = {0};
-	base64_encode2(data, len, psp.base64pps, 512);
+	base64_encode2((char *)data, len, psp.base64pps, 512);
 	#endif
-	printf("len is %d , base64 pps is %s\n",len,psp.base64pps);
 
 }
 

@@ -22,74 +22,12 @@ extern "C" {
 
 //#define SAVE_NALU 1
 
-typedef struct
-{
-    /**//* byte 0 */
-    unsigned char u4CSrcLen:4;      /**//* expect 0 */
-    unsigned char u1Externsion:1;   /**//* expect 1, see RTP_OP below */
-    unsigned char u1Padding:1;      /**//* expect 0 */
-    unsigned char u2Version:2;      /**//* expect 2 */
-    /**//* byte 1 */
-    unsigned char u7Payload:7;      /**//* RTP_PAYLOAD_RTSP */
-    unsigned char u1Marker:1;       /**//* expect 1 */
-    /**//* bytes 2, 3 */
-    unsigned short u16SeqNum;
-    /**//* bytes 4-7 */
-    unsigned long long u32TimeStamp;
-    /**//* bytes 8-11 */
-    unsigned long u32SSrc;          /**//* stream number is used here. */
-} StRtpFixedHdr;
-
-typedef struct
-{
-    //byte 0
-    unsigned char u5Type:5;
-    unsigned char u2Nri:2;
-    unsigned char u1F:1;
-} StNaluHdr; /**/ /* 1 BYTES */
-
-typedef struct
-{
-    //byte 0
-    unsigned char u5Type:5;
-    unsigned char u2Nri:2;
-    unsigned char u1F:1;
-} StFuIndicator; /**/ /* 1 BYTES */
-
-typedef struct
-{
-    //byte 0
-    unsigned char u5Type:5;
-    unsigned char u1R:1;
-    unsigned char u1E:1;
-    unsigned char u1S:1;
-} StFuHdr; /**/ /* 1 BYTES */
-
-typedef struct _tagStRtpHandle
-{
-    int                 s32Sock;
-    struct sockaddr_in  stServAddr;
-    unsigned short      u16SeqNum;
-    unsigned long long        u32TimeStampInc;
-    unsigned long long        u32TimeStampCurr;
-    unsigned long long      u32CurrTime;
-    unsigned long long      u32PrevTime;
-    unsigned int        u32SSrc;
-    StRtpFixedHdr       *pRtpFixedHdr;
-    StNaluHdr           *pNaluHdr;
-    StFuIndicator       *pFuInd;
-    StFuHdr             *pFuHdr;
-    EmRtpPayload        emPayload;
-#ifdef SAVE_NALU
-    FILE                *pNaluFile;
-#endif
-} StRtpObj, *HndRtp;
 /**************************************************************************************************
 **
 **
 **
 **************************************************************************************************/
-unsigned int RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
+HndRtp RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
 {
     HndRtp hRtp = NULL;
     struct timeval stTimeval;
@@ -169,7 +107,7 @@ unsigned int RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
 #endif
     printf("<><><><>success creat RTP<><><><>\n");
 
-    return (unsigned int)hRtp;
+    return hRtp;
 
 cleanup:
     if(hRtp)
@@ -182,16 +120,15 @@ cleanup:
         free(hRtp);
     }
 
-    return 0;
+    return NULL;
 }
 /**************************************************************************************************
 **
 **
 **
 **************************************************************************************************/
-void RtpDelete(unsigned int u32Rtp)
+void RtpDelete( HndRtp hRtp)
 {
-    HndRtp hRtp = (HndRtp)u32Rtp;
 
     if(hRtp)
     {
@@ -390,12 +327,12 @@ cleanup:
 **
 **
 **************************************************************************************************/
-unsigned int RtpSend(unsigned int u32Rtp, char *pData, int s32DataSize, unsigned long long u32TimeStamp)
+unsigned int RtpSend(void *pRtp, char *pData, int s32DataSize, unsigned long long u32TimeStamp)
 {
     int s32NalSize = 0;
     char *pNalBuf, *pDataEnd;
-    HndRtp hRtp = (HndRtp)u32Rtp;
     unsigned int u32NaluToken;
+	HndRtp hRtp = (HndRtp) pRtp;
 
     hRtp->u32TimeStampCurr = u32TimeStamp;
 

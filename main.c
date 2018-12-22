@@ -34,7 +34,6 @@ static char s_raw_path[128] = {0};
 
 #define VIDEO_BUF_SIZE	(1024 * 400)
 
-static int live_clarity = 0;/* 0为标清 */
 
 /*
 使用读写文件的方式来模拟音频输出。
@@ -95,7 +94,7 @@ void *thread_live_video(void *arg)
     read = fgets(line, sizeof(line), streamInfo_fp);
     sscanf(line, "FPS %d\n", &fps);
 
-    char videoBuf[VIDEO_BUF_SIZE];
+    unsigned char videoBuf[VIDEO_BUF_SIZE];
 
 //    MEDIA_FRAME_S h264_frame = {0};
     while(1)
@@ -160,9 +159,7 @@ void *thread_live_video(void *arg)
 **************************************************************************************************/
 int main(void)
 {
-	int s32MainFd,temp;
-	struct timespec ts = { 2, 0 };
-	pthread_t id;
+	int s32MainFd;
 
 	//申请缓冲区
 	ringmalloc(720*576);
@@ -196,12 +193,11 @@ int main(void)
     pthread_create(&pcm_output_thread, NULL, thread_live_audio, NULL);
     pthread_detach(pcm_output_thread);
 
-	// 主循环
-	while (!g_s32Quit)
-	{
-		nanosleep(&ts, NULL);
-		EventLoop(s32MainFd);	//等待事件
-	}
+
+	printf("start EventLoop\n");
+	//用于管理客户端接入
+	EventLoop(s32MainFd);	//等待事件
+
 	sleep(1);
 	ringfree();
 	printf("The Server quit!\n");
