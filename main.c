@@ -200,7 +200,6 @@ int main(void)
 	//用于管理客户端接入
 	EventLoop(s32MainFd);	//等待事件
 
-	sleep(1);
 	ringfree();
 	printf("The Server quit!\n");
 

@@ -1022,7 +1022,7 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 			}
 			Transport.type = RTP_rtp_avp;
 		}
-		else if (!strncmp(s8TranStr, "/TCP", 4))
+		else if (!strncmp(pStr, "/TCP", 4))
 		{
 			if( (pStr = strstr(s8TranStr, "interleaved")) )
 			{
@@ -1041,12 +1041,10 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 			Transport.rtp_fd = pRtsp->fd;
 //			Transport.rtcp_fd_out = pRtsp->fd;
 //			Transport.rtcp_fd_in = -1;
-
-
+			Transport.type = RTP_rtp_avp_tcp;
 
 		}
 	}
-	printf("pstr=%s\n",pStr);
 	if (Transport.type == RTP_no_transport)
 	{
 		fprintf(stderr,"AAAAAAAAAAA Unsupported Transport,%s,%d\n", __FILE__, __LINE__);
