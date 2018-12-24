@@ -1023,7 +1023,7 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 
 				//建立RTP套接字
 				rtp_s->hndRtp = (struct _tagStRtpHandle*)RtpCreate((unsigned int)(((struct sockaddr_in *)(&pRtsp->stClientAddr))->sin_addr.s_addr), Transport.u.udp.cli_ports.RTP, _h264nalu);
-				printf("<><><><>Creat RTP %p<><><><>\n",rtp_s->hndRtp);
+				printf("<><><><>Creat RTP/UDP %p<><><><>\n",rtp_s->hndRtp);
 
 				Transport.u.udp.is_multicast = 0;
 			}
@@ -1049,6 +1049,27 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 			{
 
 			}
+
+			//如果指定了客户端端口号，填充对应的两个端口号
+			if( (pStr = strstr(s8TranStr, "client_port")) )
+			{
+				pStr = strstr(s8TranStr, "=");
+				sscanf(pStr + 1, "%d", &(Transport.u.tcp.interleaved.RTP));
+				pStr = strstr(s8TranStr, "-");
+				sscanf(pStr + 1, "%d", &(Transport.u.tcp.interleaved.RTCP));
+			}
+			
+			//服务器端口
+			if (RTP_get_port_pair(&Transport.u.tcp.interleaved) != ERR_NOERROR)
+			{
+				fprintf(stderr, "Error %s,%d\n", __FILE__, __LINE__);
+				send_reply(500, 0, pRtsp);/* Internal server error */
+				return ERR_GENERIC;
+			}
+			
+			//建立RTP套接字
+			rtp_s->hndRtp = (struct _tagStRtpHandle*)RtpCreateOverTcp((unsigned int)(((struct sockaddr_in *)(&pRtsp->stClientAddr))->sin_addr.s_addr), Transport.u.udp.cli_ports.RTP, _h264nalu);
+			printf("<><><><>Creat RTP/UDP %p<><><><>\n",rtp_s->hndRtp);
 
 			Transport.rtp_fd = pRtsp->fd;
 //			Transport.rtcp_fd_out = pRtsp->fd;

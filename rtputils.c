@@ -138,6 +138,93 @@ void RtpDelete( HndRtp hRtp)
         free(hRtp);
     }
 }
+
+HndRtp RtpCreateOverTcp(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
+{
+    HndRtp hRtp = NULL;
+    struct timeval stTimeval;
+    int s32Broadcast = 1;
+
+    hRtp = (HndRtp)calloc(1, sizeof(StRtpObj));
+    if(NULL == hRtp)
+    {
+        printf("Failed to create RTP handle\n");
+        goto cleanup;
+    }
+
+
+    hRtp->s32Sock = -1;
+    if((hRtp->s32Sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    {
+        printf("Failed to create socket\n");
+        goto cleanup;
+    }
+
+    if(0xFF000000 == (u32IP & 0xFF000000))
+    {
+        if(-1 == setsockopt(hRtp->s32Sock, SOL_SOCKET, SO_BROADCAST, (char *)&s32Broadcast, sizeof(s32Broadcast)))
+        {
+            printf("Failed to set socket\n");
+            goto cleanup;
+        }
+    }
+
+    hRtp->stServAddr.sin_family = AF_INET;
+    hRtp->stServAddr.sin_port = htons(s32Port);
+    hRtp->stServAddr.sin_addr.s_addr = u32IP;
+    bzero(&(hRtp->stServAddr.sin_zero), 8);
+
+    //初始化序号
+    hRtp->u16SeqNum = 0;
+    //初始化时间戳
+    hRtp->u32TimeStampInc = 0;
+    hRtp->u32TimeStampCurr = 0;
+
+    //获取当前时间
+    if(gettimeofday(&stTimeval, NULL) == -1)
+    {
+        printf("Failed to get os time\n");
+        goto cleanup;
+    }
+
+    hRtp->u32PrevTime = stTimeval.tv_sec * 1000 + stTimeval.tv_usec / 1000;
+
+    hRtp->emPayload = emPayload;
+
+    //获取本机网络设备名
+    char local_ip[33] = {0};
+	getlocaladdr(local_ip);
+
+    hRtp->u32SSrc = htonl(inet_addr(local_ip));
+
+    //hRtp->u32SSrc = htonl(((struct sockaddr_in *)(&stIfr.ifr_addr))->sin_addr.s_addr);
+    //printf("rtp create:addr:%x,port:%d,local%x\n",u32IP,s32Port,hRtp->u32SSrc);
+#ifdef SAVE_NALU
+    hRtp->pNaluFile = fopen("nalu.264", "wb+");
+    if(NULL == hRtp->pNaluFile)
+    {
+        printf("Failed to open nalu file!\n");
+        goto cleanup;
+    }
+#endif
+    printf("<><><><>success creat RTP<><><><>\n");
+
+    return hRtp;
+
+cleanup:
+    if(hRtp)
+    {
+        if(hRtp->s32Sock >= 0)
+        {
+            close(hRtp->s32Sock);
+        }
+
+        free(hRtp);
+    }
+
+    return NULL;
+}
+
 /**************************************************************************************************
 **
 **
