@@ -8,7 +8,8 @@
 #include <sys/ioctl.h>
 #include <pthread.h>
 #include <sys/time.h>
-#include "fcntl.h"
+#include <ifaddrs.h>  
+#include <fcntl.h>
 
 #include "rtspservice.h"
 #include "rtsputils.h"
@@ -18,6 +19,40 @@ extern int g_s32DoPlay;
 //===============add===================
 
 //=====================================
+int getlocaladdr(char *addr)
+{
+	struct sockaddr_in *sin = NULL;
+	struct ifaddrs *ifa = NULL, *ifList;
+
+	if (getifaddrs(&ifList) < 0)
+	{
+		return -1;
+	}
+
+	for (ifa = ifList; ifa != NULL; ifa = ifa->ifa_next)
+	{
+		if(ifa->ifa_addr->sa_family == AF_INET)
+		{
+//			printf("\n>>> interfaceName: %s\n", ifa->ifa_name);
+
+			sin = (struct sockaddr_in *)ifa->ifa_addr;
+//			printf(">>> ipAddress: %s\n", inet_ntoa(sin->sin_addr));
+			if(strcmp(ifa->ifa_name,"lo") != 0)
+				strcpy(addr,inet_ntoa(sin->sin_addr));
+
+			sin = (struct sockaddr_in *)ifa->ifa_dstaddr;
+//			printf(">>> broadcast: %s\n", inet_ntoa(sin->sin_addr));
+
+			sin = (struct sockaddr_in *)ifa->ifa_netmask;
+//			printf(">>> subnetMask: %s\n", inet_ntoa(sin->sin_addr));
+
+		}
+	}
+
+	freeifaddrs(ifList);
+
+	return 0;
+}
 
 char *sock_ntop_host(const struct sockaddr *sa, socklen_t salen, char *str, size_t len)
 {
@@ -218,7 +253,9 @@ int ScheduleInit()
 {
     int i;
     pthread_t thread=0;
-
+	char addr[33] ={0};
+	getlocaladdr(addr);
+	printf("#### %s\n",addr);
     /*初始化数据*/
     for(i=0; i<MAX_CONNECTION; ++i)
     {
@@ -239,7 +276,7 @@ void *schedule_do(void *arg)
 {
     int i=0;
     struct timeval now;
-    unsigned long long mnow;
+    uint64_t mnow;
     struct timespec ts = {0,33333};
     int s32FindNal = 0;
     int ringbuflen=0;
@@ -283,12 +320,16 @@ void *schedule_do(void *arg)
                     {
 		
 #ifdef DEBUG
+						if(ringinfo.frame_type ==FRAME_TYPE_I)
 						printf("send i frame,length:%d,pointer:%x,timestamp:%ull\n",ringinfo.size,(int)(ringinfo.buffer),mnow);
 #endif
                         if(ringinfo.frame_type ==FRAME_TYPE_I)
                             sched[i].BeginFrame=1;
                         //if(sched[i].BeginFrame== 1)
-                            sched[i].play_action((sched[i].rtp_session->hndRtp), (char *)ringinfo.buffer, ringinfo.size, mnow);
+                            int ret = sched[i].play_action((sched[i].rtp_session->hndRtp), (char *)ringinfo.buffer, ringinfo.size, mnow);
+							if(ret < 0){
+								printf("play action is %d\n",ret);
+							}
                     }
                 }
             }
@@ -376,7 +417,7 @@ int bwrite(char *buffer, unsigned short len, RTSP_buffer * rtsp)
     rtsp->out_size += len;
 
 #ifdef RTSP_DEBUG
-    printf("(Send to client:)\n%s\n",rtsp->out_buffer);
+    printf(">>>>>>>>>>>>>>>>>>>>\n%s\n>>>>>>>>>>>>>>>>>>>>\n",rtsp->out_buffer);
 #endif
     return ERR_NOERROR;
 }

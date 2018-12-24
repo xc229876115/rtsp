@@ -202,6 +202,7 @@ int schedule_start(int id,stPlayArgs *args);
 void schedule_stop(int id);
 int schedule_remove(int id);
 int schedule_resume(int id, stPlayArgs *args);
+int getlocaladdr(char *addr);
 
 typedef enum
 {

@@ -12,6 +12,7 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <arpa/inet.h>
 
 #include "rtspservice.h"
 #include "rtputils.h"
@@ -31,7 +32,6 @@ HndRtp RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
 {
     HndRtp hRtp = NULL;
     struct timeval stTimeval;
-    struct ifreq stIfr;
     int s32Broadcast = 1;
 
     hRtp = (HndRtp)calloc(1, sizeof(StRtpObj));
@@ -81,19 +81,10 @@ HndRtp RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
     hRtp->emPayload = emPayload;
 
     //获取本机网络设备名
-    strcpy(stIfr.ifr_name, "eth0");
-    if(ioctl(hRtp->s32Sock, SIOCGIFADDR, &stIfr) < 0)
-    {
-        //printf("Failed to get host ip\n");
-        strcpy(stIfr.ifr_name, "wlan0");
-        if(ioctl(hRtp->s32Sock, SIOCGIFADDR, &stIfr) < 0)
-        {
-            printf("Failed to get host eth0 or wlan0 ip\n");
-            goto cleanup;
-        }
-    }
+    char local_ip[33] = {0};
+	getlocaladdr(local_ip);
 
-    hRtp->u32SSrc = htonl(((struct sockaddr_in *)(&stIfr.ifr_addr))->sin_addr.s_addr);
+    hRtp->u32SSrc = htonl(inet_addr(local_ip));
 
     //hRtp->u32SSrc = htonl(((struct sockaddr_in *)(&stIfr.ifr_addr))->sin_addr.s_addr);
     //printf("rtp create:addr:%x,port:%d,local%x\n",u32IP,s32Port,hRtp->u32SSrc);

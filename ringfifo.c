@@ -188,7 +188,7 @@ void hexdump(uint8_t *data , int size)
 {
 	int i;
 	for(i=0;i<size;i++){
-		printf("%02x ",data[i]);
+		printf("0x%02x ",data[i]);
 	}
 	printf("\n");
 	return;
@@ -288,20 +288,20 @@ void extract_spspps(uint8_t *data , int size )
 		{
 			UpdatePps(naluUnit.data,naluUnit.size);
 			update_flag ++;
-#ifdef DEBUG
+//#ifdef DEBUG
 			printf("pps frame info is :\n");
 			hexdump(naluUnit.data,naluUnit.size);
-#endif
+//#endif
 			printf("update pps done\n");
 			
 		}else if(naluUnit.type == 8)
 		{	
 			update_flag ++;
 			UpdateSps(naluUnit.data,naluUnit.size);
-#ifdef DEBUG
+//#ifdef DEBUG
 			printf("sps frame info is :\n");
 			hexdump(naluUnit.data,naluUnit.size);
-#endif
+//#endif
 			printf("update sps done\n");
 		}
 		

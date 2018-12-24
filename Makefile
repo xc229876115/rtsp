@@ -5,7 +5,8 @@ STRIP	?=	$(HOST)strip
 INCLUDE	=-I./include/
 LIBS	=-lpthread -lm
 
-CFLAGS	+= $(INCLUDE) -g -Wall
+CFLAGS	+= $(INCLUDE) -g -Wall 
+#-DDEBUG
 LDFLAGS	+=$(LIBS)
 
 SRC	:=main.c ringfifo.c rtputils.c rtspservice.c rtsputils.c 

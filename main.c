@@ -102,6 +102,7 @@ void *thread_live_video(void *arg)
         read = fgets(line, sizeof(line), streamInfo_fp);
         if(read == NULL)
         {
+        	printf("rewind video file\n");
             rewind(streamBin_fp);
             rewind(streamInfo_fp);
             read = fgets(line, sizeof(line), streamInfo_fp);
@@ -117,6 +118,7 @@ void *thread_live_video(void *arg)
         nRet = fread(videoBuf, 1, frame_size, streamBin_fp);
         if(nRet < frame_size)
         {
+        	printf("rewind video file\n");
             rewind(streamBin_fp);
             rewind(streamInfo_fp);
             read = fgets(line, sizeof(line), streamInfo_fp);

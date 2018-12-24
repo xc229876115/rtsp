@@ -59,7 +59,9 @@ void PrefsInit()
 	int l;
 	//设置服务器信息全局变量
 	stPrefs.port = SERVER_RTSP_PORT_DEFAULT;
-
+	char addr[33]={0};
+	
+	getlocaladdr(addr);
 	gethostname(stPrefs.hostname,sizeof(stPrefs.hostname));
 	l=strlen(stPrefs.hostname);
 	if (getdomainname(stPrefs.hostname+l+1,sizeof(stPrefs.hostname)-l)!=0)
@@ -71,7 +73,7 @@ void PrefsInit()
 	printf("\n");
 	printf("\thostname is: %s\n", stPrefs.hostname);
 	printf("\trtsp listening port is: %d\n", stPrefs.port);
-	printf("\tInput rtsp://hostIP:%d/test.264 to play this\n",stPrefs.port);
+	printf("\tInput rtsp://%s:%d/test.264 to play this\n",addr,stPrefs.port);
 	printf("\n");
 #endif
 
@@ -586,17 +588,8 @@ void GetSdpDescr(RTSP_buffer * pRtsp, char *pDescr, char *s8Str)
 	struct ifreq stIfr;
 	char pSdpId[128];
 	char rtp_port[5];
-	strcpy(stIfr.ifr_name, "ens33");
-	if(ioctl(pRtsp->fd, SIOCGIFADDR, &stIfr) < 0)
-	{
-		//printf("Failed to get host eth0 ip\n");
-		strcpy(stIfr.ifr_name, "ens33");
-		if(ioctl(pRtsp->fd, SIOCGIFADDR, &stIfr) < 0)
-		{
-			printf("Failed to get host eth0 or wlan0 ip\n");
-		}
-	}
-	sock_ntop_host(&stIfr.ifr_addr, sizeof(struct sockaddr), s8Str, 128);
+
+	getlocaladdr(s8Str);
 
 	GetSdpId(pSdpId);
 
@@ -748,7 +741,7 @@ int RTSP_describe(RTSP_buffer * pRtsp)
 	char s8Url[255];
 	char s8Descr[MAX_DESCR_LENGTH];
 	char server[128];
-	char s8Str[128];
+	char s8Str[128] = {0};
 
 	/*根据收到的请求请求消息，跳过方法名，分离出URL*/
 	if (!sscanf(pRtsp->in_buffer, " %*s %254s ", s8Url))
@@ -867,7 +860,7 @@ int RTSP_options(RTSP_buffer * pRtsp)
     cseq = pRtsp->rtsp_cseq;
 
 #ifdef RTSP_DEBUG
-    sscanf(pRtsp->in_buffer, " %31s %255s %31s ", method, url, ver);
+    sscanf(pRtsp->in_buffer, " %31s %254s %31s ", method, url, ver);
     fprintf(stderr,"%s %s %s \n",method,url,ver);
 #endif
 
@@ -898,8 +891,8 @@ int send_setup_reply(RTSP_buffer *pRtsp, RTSP_session *pSession, RTP_session *pR
 			}
 			else
 			{
-				sprintf(s8Str + strlen(s8Str), "RTP/AVP/UDP;unicast;client_port=%d-%d;destination=192.168.245.65;source=%s;server_port=", \
-						pRtpSes->transport.u.udp.cli_ports.RTP, pRtpSes->transport.u.udp.cli_ports.RTCP,"192.168.245.96");
+				sprintf(s8Str + strlen(s8Str), "RTP/AVP;unicast;client_port=%d-%d;server_port=", \
+						pRtpSes->transport.u.udp.cli_ports.RTP, pRtpSes->transport.u.udp.cli_ports.RTCP);
 			}
 
 			sprintf(s8Str + strlen(s8Str), "%d-%d"RTSP_EL, pRtpSes->transport.u.udp.ser_ports.RTP, pRtpSes->transport.u.udp.ser_ports.RTCP);
@@ -926,7 +919,7 @@ int send_setup_reply(RTSP_buffer *pRtsp, RTSP_session *pSession, RTP_session *pR
 **************************************************************************************************/
 int RTSP_setup(RTSP_buffer * pRtsp)
 {
-	char s8TranStr[128], *s8Str;
+	char s8TranStr[255], *s8Str;
 	char *pStr;
 	RTP_transport Transport;
 	int s32SessionID=0;
@@ -942,7 +935,7 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 	}
 
 	//检查传输层子串是否正确
-	if (sscanf(s8Str, "%*10s %255s", s8TranStr) != 1)
+	if (sscanf(s8Str, "%*10s %254s", s8TranStr) != 1)
 	{
 		fprintf(stderr,"SETUP request malformed: Transport string is empty\n");
 		send_reply(400, 0, pRtsp);       // Bad Request
@@ -1136,7 +1129,7 @@ int RTSP_play(RTSP_buffer * pRtsp)
 	}
 	else
 	{
-		if (sscanf(pStr, "%254s %d", pTrash, &(pRtsp->rtsp_cseq)) != 2)
+		if (sscanf(pStr, "%127s %d", pTrash, &(pRtsp->rtsp_cseq)) != 2)
 		{
 			send_reply(400, 0, pRtsp);    /* Bad Request */
 			printf("get CSeq!! 2 400");
@@ -1147,7 +1140,7 @@ int RTSP_play(RTSP_buffer * pRtsp)
 	//获取session
 	if ((pStr = strstr(pRtsp->in_buffer, HDR_SESSION)) != NULL)
 	{
-		if (sscanf(pStr, "%254s %ld", pTrash, &s32SessionId) != 2)
+		if (sscanf(pStr, "%127s %ld", pTrash, &s32SessionId) != 2)
 		{
 			send_reply(454, 0, pRtsp);// Session Not Found
 			printf("Session Not Found");
@@ -1281,7 +1274,7 @@ int RTSP_teardown(RTSP_buffer * pRtsp)
 	}
 	else
 	{
-		if (sscanf(pStr, "%254s %d", pTrash, &(pRtsp->rtsp_cseq)) != 2)
+		if (sscanf(pStr, "%127s %d", pTrash, &(pRtsp->rtsp_cseq)) != 2)
 		{
 			send_reply(400, 0, pRtsp);    // Bad Request
 			printf("get CSeq 2 error");
@@ -1292,7 +1285,7 @@ int RTSP_teardown(RTSP_buffer * pRtsp)
 	//获取session
 	if ((pStr = strstr(pRtsp->in_buffer, HDR_SESSION)) != NULL)
 	{
-		if (sscanf(pStr, "%254s %ld", pTrash, &s32SessionId) != 2)
+		if (sscanf(pStr, "%127s %ld", pTrash, &s32SessionId) != 2)
 		{
 			send_reply(454, 0, pRtsp);	// Session Not Found
 			return ERR_NOERROR;
@@ -1523,7 +1516,8 @@ void RTSP_state_machine(RTSP_buffer * pRtspBuf, int method)
                     break;
 
                 case RTSP_ID_OPTIONS:
-                    break;
+                    RTSP_options(pRtspBuf);
+					break;
 
                 case RTSP_ID_DESCRIBE:
                     RTSP_describe(pRtspBuf);
@@ -1607,11 +1601,11 @@ int RTSP_handler(RTSP_buffer *pRtspBuf)
 		{
 			//进入到状态机，处理接收的请求
 			RTSP_state_machine(pRtspBuf, s32Meth);
-			printf("exit Rtsp_state_machine\r\n");
+//			printf("exit Rtsp_state_machine\r\n");
 		}
 		//丢弃处理之后的消息
 		RTSP_discard_msg(pRtspBuf);
-		printf("4\r\n");
+//		printf("4\r\n");
 	}
 	return ERR_NOERROR;
 }
@@ -1689,7 +1683,7 @@ int RtspServer(RTSP_buffer *rtsp)
 		}
 
 #ifdef RTSP_DEBUG
-		fprintf(stderr,":%s\n", buffer);
+		fprintf(stderr,"<<<<<<<<<<<<<<<<<<<<<\n%s \n<<<<<<<<<<<<<<<<<<<<<\n", buffer);
 #endif
 
 		/*填充数据*/
@@ -1809,7 +1803,6 @@ void ScheduleConnections(RTSP_buffer **rtsp_list)
                 	pRtspN->next=pRtsp->next;
                     free(pRtsp);
                     pRtsp=pRtspN->next;
-					printf("current next fd:%d\n",pRtsp->fd);
                 }
 
             }
@@ -1943,7 +1936,6 @@ int EventLoop(int s32MainFd)
 		tv.tv_sec  =2; 	/*select 时间间隔*/
 		tv.tv_usec =0;
 
-		printf("start New selcet\n");
 		/*调用select等待对应描述符变化*/
 		ret = select(s32MainFd+1,&rset,0,&errset,&tv);
 		switch(ret)
@@ -1954,6 +1946,7 @@ int EventLoop(int s32MainFd)
 			case 0:
 #ifdef DEBUG
 				printf("%s %d select timeout \n",__FILE__, __LINE__);
+				printf("start New selcet\n");
 #endif	
 				break;
 			default:
@@ -2044,9 +2037,9 @@ void base64_encode2(char *in, const int in_len, char *out, int out_len)
 {
 	static const char *codes ="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-	int base64_len = 4 * ((in_len+2)/3);
-	if(out_len >= base64_len)
-		printf("out_len >= base64_len\n");
+//	int base64_len = 4 * ((in_len+2)/3);
+//	if(out_len >= base64_len)
+//		printf("out_len >= base64_len\n");
 	char *p = out;
 	int times = in_len / 3;
 	int i;
