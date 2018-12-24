@@ -90,6 +90,18 @@ void RTSP_initserver(RTSP_buffer *rtsp, int fd)
     rtsp->session_list = (RTSP_session *) calloc(1, sizeof(RTSP_session));
     rtsp->session_list->session_id = -1;
 }
+
+int get_avaiable_RTP_port()
+{
+    int i;
+    for (i=0; i<MAX_CONNECTION; ++i)
+    {
+    	if(s_uPortPool[i] != 0)
+			return s_uPortPool[i];
+    }
+	return -1;
+}
+
 /**************************************************************************************************
 **
 **
@@ -617,7 +629,7 @@ void GetSdpDescr(RTSP_buffer * pRtsp, char *pDescr, char *s8Str)
 	/**** media specific ****/
 	strcat(pDescr,"m=");
 	strcat(pDescr,"video ");
-	sprintf(rtp_port,"%d",s_u32StartPort);
+	sprintf(rtp_port,"%d",get_avaiable_RTP_port());
 	strcat(pDescr, rtp_port);
 	strcat(pDescr," RTP/AVP "); /* Use UDP */
 	strcat(pDescr,"96\r\n");
@@ -1820,6 +1832,8 @@ void ScheduleConnections(RTSP_buffer **rtsp_list)
         }
     }
 }
+
+
 /**************************************************************************************************
 **
 **
@@ -1831,7 +1845,7 @@ void RTP_port_pool_init(int port)
     s_u32StartPort = port;
     for (i=0; i<MAX_CONNECTION; ++i)
     {
-    	s_uPortPool[i] = i+s_u32StartPort;
+    	s_uPortPool[i] = i*2+s_u32StartPort;
     }
 }
 
