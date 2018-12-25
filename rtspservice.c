@@ -597,14 +597,14 @@ void GetSdpDescr(RTSP_buffer * pRtsp, char *pDescr, char *s8Str)
 //			printf("SDP:\n%s\n", pDescr);
 #endif
 */
-	struct ifreq stIfr;
 	char pSdpId[128];
 	char rtp_port[5];
 
 	getlocaladdr(s8Str);
 
 	GetSdpId(pSdpId);
-
+	memset(pSdpId,0,sizeof(pSdpId));
+	strcpy(pSdpId,"3603282");
 	strcpy(pDescr, "v=0\r\n");	
 	strcat(pDescr, "o=-");
 	strcat(pDescr, pSdpId);
@@ -725,7 +725,7 @@ int SendDescribeReply(RTSP_buffer * rtsp, char *object, char *descr, char *s8Str
 
     /*用于解析实体内相对url的 绝对url*/
     sprintf(pMsgBuf + strlen(pMsgBuf), "Content-Base: rtsp://%s/%s/"RTSP_EL, s8Str, object);
-    sprintf(pMsgBuf + strlen(pMsgBuf), "Content-Length: %d"RTSP_EL, strlen(descr)); /*消息体的长度*/
+    sprintf(pMsgBuf + strlen(pMsgBuf), "Content-Length: %ld"RTSP_EL, strlen(descr)); /*消息体的长度*/
     strcat(pMsgBuf, RTSP_EL);
 
     /*消息头结束*/
@@ -1050,27 +1050,10 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 
 			}
 
-			//如果指定了客户端端口号，填充对应的两个端口号
-			if( (pStr = strstr(s8TranStr, "client_port")) )
-			{
-				pStr = strstr(s8TranStr, "=");
-				sscanf(pStr + 1, "%d", &(Transport.u.tcp.interleaved.RTP));
-				pStr = strstr(s8TranStr, "-");
-				sscanf(pStr + 1, "%d", &(Transport.u.tcp.interleaved.RTCP));
-			}
-			
-			//服务器端口
-			if (RTP_get_port_pair(&Transport.u.tcp.interleaved) != ERR_NOERROR)
-			{
-				fprintf(stderr, "Error %s,%d\n", __FILE__, __LINE__);
-				send_reply(500, 0, pRtsp);/* Internal server error */
-				return ERR_GENERIC;
-			}
-			
-			//建立RTP套接字
-			rtp_s->hndRtp = (struct _tagStRtpHandle*)RtpCreateOverTcp((unsigned int)(((struct sockaddr_in *)(&pRtsp->stClientAddr))->sin_addr.s_addr), Transport.u.udp.cli_ports.RTP, _h264nalu);
-			printf("<><><><>Creat RTP/UDP %p<><><><>\n",rtp_s->hndRtp);
-
+			//建立RTP
+			rtp_s->hndRtp = (struct _tagStRtpHandle*)RtpCreateOverTcp(pRtsp->fd, _h264nalu);
+//			printf("<><><><>Creat RTP/TCP %p<><><><>\n",rtp_s->hndRtp);
+			rtp_s->hndRtp->s32Sock = pRtsp->fd;
 			Transport.rtp_fd = pRtsp->fd;
 //			Transport.rtcp_fd_out = pRtsp->fd;
 //			Transport.rtcp_fd_in = -1;
@@ -1101,14 +1084,12 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 	{
 		//产生一个非0的随机的会话序号
 		struct timeval stNowTmp;
-		gettimeofday(&stNowTmp, 0);
-		srand((stNowTmp.tv_sec * 1000) + (stNowTmp.tv_usec / 1000));
-		s32SessionID = 1 + (int) (10.0 * rand() / (100000 + 1.0));
-		if (s32SessionID == 0)
-		{
-			s32SessionID++;
-		}
+		gettimeofday(&stNowTmp, NULL);
+		s32SessionID = stNowTmp.tv_sec + stNowTmp.tv_usec;
+		printf("####session id is %d\n",s32SessionID);
 	}
+
+	rtp_s->priv = (void *)pRtsp;
 
 	pRtsp->session_list->session_id = s32SessionID;
 	pRtsp->session_list->rtp_session->sched_id = schedule_add(rtp_s);
@@ -2069,6 +2050,7 @@ char * base64_encode(const unsigned char * bindata, char * base64, int binlength
 void base64_encode2(char *in, const int in_len, char *out, int out_len)
 {
 	static const char *codes ="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	return ;
 
 //	int base64_len = 4 * ((in_len+2)/3);
 //	if(out_len >= base64_len)

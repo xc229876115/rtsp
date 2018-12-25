@@ -139,11 +139,10 @@ void RtpDelete( HndRtp hRtp)
     }
 }
 
-HndRtp RtpCreateOverTcp(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
+HndRtp RtpCreateOverTcp(int sock, EmRtpPayload emPayload)
 {
     HndRtp hRtp = NULL;
     struct timeval stTimeval;
-    int s32Broadcast = 1;
 
     hRtp = (HndRtp)calloc(1, sizeof(StRtpObj));
     if(NULL == hRtp)
@@ -152,27 +151,7 @@ HndRtp RtpCreateOverTcp(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
         goto cleanup;
     }
 
-
-    hRtp->s32Sock = -1;
-    if((hRtp->s32Sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-    {
-        printf("Failed to create socket\n");
-        goto cleanup;
-    }
-
-    if(0xFF000000 == (u32IP & 0xFF000000))
-    {
-        if(-1 == setsockopt(hRtp->s32Sock, SOL_SOCKET, SO_BROADCAST, (char *)&s32Broadcast, sizeof(s32Broadcast)))
-        {
-            printf("Failed to set socket\n");
-            goto cleanup;
-        }
-    }
-
-    hRtp->stServAddr.sin_family = AF_INET;
-    hRtp->stServAddr.sin_port = htons(s32Port);
-    hRtp->stServAddr.sin_addr.s_addr = u32IP;
-    bzero(&(hRtp->stServAddr.sin_zero), 8);
+    hRtp->s32Sock = sock;
 
     //初始化序号
     hRtp->u16SeqNum = 0;
@@ -197,8 +176,6 @@ HndRtp RtpCreateOverTcp(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
 
     hRtp->u32SSrc = htonl(inet_addr(local_ip));
 
-    //hRtp->u32SSrc = htonl(((struct sockaddr_in *)(&stIfr.ifr_addr))->sin_addr.s_addr);
-    //printf("rtp create:addr:%x,port:%d,local%x\n",u32IP,s32Port,hRtp->u32SSrc);
 #ifdef SAVE_NALU
     hRtp->pNaluFile = fopen("nalu.264", "wb+");
     if(NULL == hRtp->pNaluFile)
@@ -207,18 +184,13 @@ HndRtp RtpCreateOverTcp(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
         goto cleanup;
     }
 #endif
-    printf("<><><><>success creat RTP<><><><>\n");
+    printf("<><><><>success creat RTP/TCP<><><><>\n");
 
     return hRtp;
 
 cleanup:
     if(hRtp)
     {
-        if(hRtp->s32Sock >= 0)
-        {
-            close(hRtp->s32Sock);
-        }
-
         free(hRtp);
     }
 
@@ -230,7 +202,7 @@ cleanup:
 **
 **
 **************************************************************************************************/
-static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
+static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize , RTP_session *S)
 {
     char *pNaluPayload;
     char *pSendBuf;
@@ -240,7 +212,8 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
     char *pNaluCurr;
     int s32NaluRemain;
     unsigned char u8NaluBytes;
-
+	char *start;
+	
     pSendBuf = (char *)calloc(MAX_RTP_PKT_LENGTH + 100, sizeof(char));
     if(NULL == pSendBuf)
     {
@@ -248,13 +221,26 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
         goto cleanup;
     }
 
-    hRtp->pRtpFixedHdr = (StRtpFixedHdr *)pSendBuf;
+	if(S->transport.type == RTP_rtp_avp_tcp )
+	{
+		pSendBuf[0] = 0x24;
+		pSendBuf[1] = S->transport.u.tcp.interleaved.RTP;
+		pSendBuf[2] = ((s32NalBufSize+12) >> 8) & 0xFF;
+		pSendBuf[3] = (s32NalBufSize+12) & 0xFF;
+		
+		start =(pSendBuf+4) ;
+			
+	}
+	else
+		start = pSendBuf;
+
+	hRtp->pRtpFixedHdr = (StRtpFixedHdr *)start;
     hRtp->pRtpFixedHdr->u7Payload   = H264;
     hRtp->pRtpFixedHdr->u2Version   = 2;
     hRtp->pRtpFixedHdr->u1Marker    = 0;
     hRtp->pRtpFixedHdr->u32SSrc     = hRtp->u32SSrc;
     //计算时间戳
-    hRtp->pRtpFixedHdr->u32TimeStamp = htonl(hRtp->u32TimeStampCurr * (90000 / 1000));
+    hRtp->pRtpFixedHdr->u32TimeStamp = htonl(hRtp->u32TimeStampCurr);
     //printf("sendnalu264 timestamp:%lld\n",hRtp->u32TimeStampCurr);
     if(gettimeofday(&stTimeval, NULL) == -1)
     {
@@ -275,20 +261,34 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
     {
         hRtp->pRtpFixedHdr->u1Marker    = 1;
         hRtp->pRtpFixedHdr->u16SeqNum   = htons(hRtp->u16SeqNum ++);
-        hRtp->pNaluHdr                  = (StNaluHdr *)(pSendBuf + 12);
+        hRtp->pNaluHdr                  = (StNaluHdr *)(start + 12);
         hRtp->pNaluHdr->u1F             = (u8NaluBytes & 0x80) >> 7;
         hRtp->pNaluHdr->u2Nri           = (u8NaluBytes & 0x60) >> 5;
         hRtp->pNaluHdr->u5Type          = u8NaluBytes & 0x1f;
 
-        pNaluPayload = (pSendBuf + 13);
+        pNaluPayload = (start + 13);
         memcpy(pNaluPayload, pNaluCurr, s32NaluRemain);
 
         s32Bytes = s32NaluRemain + 13;
-        if(sendto(hRtp->s32Sock, pSendBuf, s32Bytes, 0, (struct sockaddr *)&hRtp->stServAddr, sizeof(hRtp->stServAddr)) < 0)
-        {
-            s32Ret = -1;
-            goto cleanup;
-        }
+
+		
+		if(S->transport.type == RTP_rtp_avp_tcp )
+		{
+			if(bwrite(pSendBuf, s32Bytes,(RTSP_buffer *)S->priv) < 0)
+			{
+				s32Ret = -1;
+				goto cleanup;
+			}
+
+		}
+		else
+		{
+	        if(sendto(hRtp->s32Sock, pSendBuf, s32Bytes, 0, (struct sockaddr *)&hRtp->stServAddr, sizeof(hRtp->stServAddr)) < 0)
+	        {
+	            s32Ret = -1;
+	            goto cleanup;
+	        }
+		}
 #ifdef SAVE_NALU
         fwrite(pSendBuf, s32Bytes, 1, hRtp->pNaluFile);
 #endif
@@ -297,18 +297,18 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
     else
     {
         //指定fu indicator位置
-        hRtp->pFuInd            = (StFuIndicator *)(pSendBuf + 12);
+        hRtp->pFuInd            = (StFuIndicator *)(start + 12);
         hRtp->pFuInd->u1F       = (u8NaluBytes & 0x80) >> 7;
         hRtp->pFuInd->u2Nri     = (u8NaluBytes & 0x60) >> 5;
         hRtp->pFuInd->u5Type    = 28;
 
         //指定fu header位置
-        hRtp->pFuHdr            = (StFuHdr *)(pSendBuf + 13);
+        hRtp->pFuHdr            = (StFuHdr *)(start + 13);
         hRtp->pFuHdr->u1R       = 0;
         hRtp->pFuHdr->u5Type    = u8NaluBytes & 0x1f;
 
         //指定payload位置
-        pNaluPayload = (pSendBuf + 14);
+        pNaluPayload = (start + 14);
 
         //当剩余Nalu数据多于0时分批发送nalu数据
         while(s32NaluRemain > 0)
@@ -331,11 +331,22 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize)
 
             //发送本批次
             s32Bytes = s32Bytes + 14;
-            if(sendto(hRtp->s32Sock, pSendBuf, s32Bytes, 0, (struct sockaddr *)&hRtp->stServAddr, sizeof(hRtp->stServAddr)) < 0)
-            {
-                s32Ret = -1;
-                goto cleanup;
-            }
+			if(S->transport.type == RTP_rtp_avp_tcp )
+			{
+				if(bwrite(pSendBuf, s32Bytes,(RTSP_buffer *)S->priv) < 0)
+				{
+					s32Ret = -1;
+					goto cleanup;
+				}
+
+			}else
+			{            
+				if(sendto(hRtp->s32Sock, pSendBuf, s32Bytes, 0, (struct sockaddr *)&hRtp->stServAddr, sizeof(hRtp->stServAddr)) < 0)
+	            {
+	                s32Ret = -1;
+	                goto cleanup;
+	            }
+			}
 #ifdef SAVE_NALU
             fwrite(pSendBuf, s32Bytes, 1, hRtp->pNaluFile);
 #endif
@@ -405,14 +416,16 @@ cleanup:
 **
 **
 **************************************************************************************************/
-unsigned int RtpSend(void *pRtp, char *pData, int s32DataSize, unsigned long long u32TimeStamp)
+unsigned int RtpSend(void *session, char *pData, int s32DataSize, unsigned long long u32TimeStamp)
 {
     int s32NalSize = 0;
     char *pNalBuf, *pDataEnd;
     unsigned int u32NaluToken;
-	HndRtp hRtp = (HndRtp) pRtp;
+	RTP_session *s = (RTP_session *) session;
+	HndRtp hRtp = s->hndRtp;
 
     hRtp->u32TimeStampCurr = u32TimeStamp;
+
 
     if(_h264 == hRtp->emPayload)
     {
@@ -437,7 +450,7 @@ unsigned int RtpSend(void *pRtp, char *pData, int s32DataSize, unsigned long lon
             if(0x01000000 == u32NaluToken)
             {
                 s32NalSize = (int)(pData - pNalBuf);
-                if(SendNalu264(hRtp, pNalBuf, s32NalSize) == -1)
+                if(SendNalu264(hRtp, pNalBuf, s32NalSize,s) == -1)
                 {
                     return -1;
                 }
@@ -451,7 +464,7 @@ unsigned int RtpSend(void *pRtp, char *pData, int s32DataSize, unsigned long lon
         if(pData > pNalBuf)
         {
             s32NalSize = (int)(pData - pNalBuf);
-            if(SendNalu264(hRtp, pNalBuf, s32NalSize) == -1)
+            if(SendNalu264(hRtp, pNalBuf, s32NalSize,s) == -1)
             {
                 return -1;
             }
@@ -459,7 +472,7 @@ unsigned int RtpSend(void *pRtp, char *pData, int s32DataSize, unsigned long lon
     }
     else if(_h264nalu == hRtp->emPayload)
     {
-        if(SendNalu264(hRtp, pData, s32DataSize) == -1)
+        if(SendNalu264(hRtp, pData, s32DataSize,s) == -1)
         {
             return -1;
         }

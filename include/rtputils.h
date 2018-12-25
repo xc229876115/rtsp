@@ -99,10 +99,11 @@ typedef struct _tagStRtpHandle
 
 
 enum H264_FRAME_TYPE {FRAME_TYPE_I, FRAME_TYPE_P, FRAME_TYPE_B};
+HndRtp RtpCreateOverTcp(int sock, EmRtpPayload emPayload);
 
 HndRtp RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload);
 void RtpDelete(HndRtp hRtp);
-unsigned int RtpSend(void * pRtp, char *pData, int s32DataSize, unsigned long long u32TimeStamp);
+unsigned int RtpSend(void * session, char *pData, int s32DataSize, unsigned long long u32TimeStamp);
 
 #ifdef __cplusplus
 }

@@ -321,12 +321,12 @@ void *schedule_do(void *arg)
 		
 #ifdef DEBUG
 						if(ringinfo.frame_type ==FRAME_TYPE_I)
-						printf("send i frame,length:%d,pointer:%x,timestamp:%ull\n",ringinfo.size,(int)(ringinfo.buffer),mnow);
+						printf("send i frame,length:%d,pointer:%p,timestamp:%lu\n",ringinfo.size,ringinfo.buffer,mnow);
 #endif
                         if(ringinfo.frame_type ==FRAME_TYPE_I)
                             sched[i].BeginFrame=1;
                         //if(sched[i].BeginFrame== 1)
-                            int ret = sched[i].play_action((sched[i].rtp_session->hndRtp), (char *)ringinfo.buffer, ringinfo.size, mnow);
+                            int ret = sched[i].play_action((sched[i].rtp_session), (char *)ringinfo.buffer, ringinfo.size, mnow);
 							if(ret < 0){
 								printf("play action is %d\n",ret);
 							}

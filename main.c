@@ -65,7 +65,7 @@ void *thread_live_audio(void *arg)
 #endif 
 
         int frameRate = AUDIO_FPS;
-        int sleepTick = 1000000/frameRate;
+        int sleepTick = (int)(1000000.0/frameRate);
         usleep(sleepTick);
     }
 
@@ -147,7 +147,7 @@ void *thread_live_video(void *arg)
 #endif
 
         int frameRate = fps;
-        int sleepTick = 1000000/frameRate;
+        int sleepTick = (int)(1000000.0/frameRate);
         usleep(sleepTick);
     }
 

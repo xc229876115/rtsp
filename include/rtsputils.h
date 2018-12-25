@@ -133,6 +133,7 @@ typedef struct _RTP_session {
     unsigned char pause;
     unsigned char started;
     int sched_id;
+	void *priv;
 	struct _RTP_session *next;
 }RTP_session;
 
@@ -185,7 +186,7 @@ typedef struct _play_args
     float end_time;                                     /*结束时间*/
 } stPlayArgs;
 
-typedef unsigned int (*RTP_play_action)(void *Rtp, char *pData, int s32DataSize, unsigned long long u32TimeStamp);
+typedef unsigned int (*RTP_play_action)(void *session, char *pData, int s32DataSize, unsigned long long u32TimeStamp);
 
 typedef struct _schedule_list
 {
