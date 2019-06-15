@@ -21,6 +21,8 @@
 #include "rtspservice.h"
 #include "rtputils.h"
 #include "ringfifo.h"
+#include "g711_utils.h"
+
 
 struct profileid_sps_pps{
 	char base64profileid[10];
@@ -28,13 +30,25 @@ struct profileid_sps_pps{
 	char base64pps[524];
 };
 
-pthread_mutex_t mut; 
+RTSP_client *pRtspListHead=NULL; // 链表管理client
+
+typedef struct{
+    char init;
+    int s32ConCnt ;//已经连接的客户端数
+    pthread_mutex_t lock ;
+    int s32MainFd;
+    uint32_t s_u32StartPort;
+    uint32_t s_uPortPool[MAX_CONNECTION];//RTP端口
+    int g_s32Quit ;//退出全局变量
+
+} RtspServer_t;
+
 
 #define MAX_SIZE 1024*1024*200
 #define SDP_EL "\r\n"
 #define RTSP_RTP_AVP "RTP/AVP"
 
-
+static RtspServer_t serverInfo;
 struct profileid_sps_pps psp; //存base64编码的profileid sps pps
 
 StServPrefs stPrefs;
@@ -42,10 +56,8 @@ extern int num_conn;
 int g_s32Maxfd = 0;//最大轮询id号
 int g_s32DoPlay = 0;
 
-uint32_t s_u32StartPort=RTP_DEFAULT_PORT;
-uint32_t s_uPortPool[MAX_CONNECTION];//RTP端口
+
 extern int stop_schedule;
-int g_s32Quit = 0;//退出全局变量
 
 void RTP_port_pool_init(int port);
 int UpdateSpsOrPps(unsigned char *data,int frame_type,int len);
@@ -54,7 +66,7 @@ int UpdateSpsOrPps(unsigned char *data,int frame_type,int len);
 **
 **
 **************************************************************************************************/
-void PrefsInit()
+void displayInfo()
 {
 	int l;
 	//设置服务器信息全局变量
@@ -78,26 +90,14 @@ void PrefsInit()
 #endif
 
 }
-/**************************************************************************************************
-**
-**
-**
-**************************************************************************************************/
-//客户端session并配空间并初始化 ，填充句柄
-void RTSP_initserver(RTSP_buffer *rtsp, int fd)
-{
-    rtsp->fd = fd;
-    rtsp->session_list = (RTSP_session *) calloc(1, sizeof(RTSP_session));
-    rtsp->session_list->session_id = -1;
-}
 
 int get_avaiable_RTP_port()
 {
     int i;
     for (i=0; i<MAX_CONNECTION; ++i)
     {
-    	if(s_uPortPool[i] != 0)
-			return s_uPortPool[i];
+    	if(serverInfo.s_uPortPool[i] != 0)
+			return serverInfo.s_uPortPool[i];
     }
 	return -1;
 }
@@ -114,34 +114,70 @@ int RTP_get_port_pair(port_pair *pair)
 
     for (i=0; i<MAX_CONNECTION; ++i)
     {
-        if (s_uPortPool[i]!=0)
+        if (serverInfo.s_uPortPool[i]!=0)
         {
-            pair->RTP=(s_uPortPool[i]-s_u32StartPort)*2+s_u32StartPort;
+            pair->RTP=(serverInfo.s_uPortPool[i]-serverInfo.s_u32StartPort)*2+serverInfo.s_u32StartPort;
             pair->RTCP=pair->RTP+1;
-            s_uPortPool[i]=0;
+            serverInfo.s_uPortPool[i]=0;
             return ERR_NOERROR;
         }
     }
     return ERR_GENERIC;
+}
+
+/*remove node from list*/
+void RemoveClient(RTSP_client **ppRtspList , RTSP_client *node)
+{
+    RTSP_client *pRtsp=*ppRtspList;
+    printf("Remove Client %p , %p\n",node,*ppRtspList);
+    /*第一个元素*/
+    if ( node == *ppRtspList )
+    {
+        *ppRtspList =node->next;
+        printf("after Remove Client %p \n",*ppRtspList);
+        free(node);
+        node = NULL;
+        return;
+    }
+
+    //不是链表中的第一个，
+    while(pRtsp)
+    {
+        if(pRtsp->next == node)
+        {
+    		printf("delete current fd:%d\n",node->fd);
+        	pRtsp->next=node->next;
+            free(node);
+            break;
+    	}
+        pRtsp=pRtsp->next;
+    }
+    return;
 }
 /**************************************************************************************************
 **
 **
 **
 **************************************************************************************************/
-void AddClient(RTSP_buffer **ppRtspList, int fd)
+void AddClient(RTSP_client **ppRtspList, int fd , struct sockaddr *addr)
 {
-    RTSP_buffer *pRtsp=NULL,*pRtspNew=NULL;
+    RTSP_client *pRtsp=NULL,*pRtspNew=NULL;
 
 #ifdef RTSP_DEBUG
-    fprintf(stderr, "%s, %d\n", __FUNCTION__, __LINE__);
+    fprintf(stderr, "%s, %d  ppRtspList is %p\n", __FUNCTION__, __LINE__,*ppRtspList);
 #endif
 
     //在链表头部插入第一个元素
     if (*ppRtspList==NULL)
     {
         /*分配空间*/
-        if ( !(*ppRtspList=(RTSP_buffer*)calloc(1,sizeof(RTSP_buffer)) ) )
+        void *p = malloc(4096);
+        if(NULL == p ){
+            fprintf(stderr,"alloc memory error %s,%i\n", __FILE__, __LINE__);
+            exit(0);
+            return;
+        }
+        if ( !(*ppRtspList=(RTSP_client*)calloc(1,sizeof(RTSP_client)) ) )
         {
             fprintf(stderr,"alloc memory error %s,%i\n", __FILE__, __LINE__);
             return;
@@ -153,12 +189,20 @@ void AddClient(RTSP_buffer **ppRtspList, int fd)
     	//向链表中插入新的元素
         for (pRtsp=*ppRtspList; pRtsp!=NULL; pRtsp=pRtsp->next)
         {
+            printf("node %p\n",pRtsp);
         	pRtspNew=pRtsp;
         }
         /*在链表尾部插入*/
         if (pRtspNew!=NULL)
         {
-        	if ( !(pRtspNew->next=(RTSP_buffer *)calloc(1,sizeof(RTSP_buffer)) ) )
+                 /*分配空间*/
+            void *p = malloc(4096);
+            if(NULL == p ){
+                fprintf(stderr,"alloc memory error %s,%i\n", __FILE__, __LINE__);
+                exit(0);
+                return;
+            }
+        if ( !(pRtspNew->next=(RTSP_client *)calloc(1,sizeof(RTSP_client)) ) )
             {
                 fprintf(stderr, "error calloc %s,%i\n", __FILE__, __LINE__);
                 return;
@@ -174,8 +218,14 @@ void AddClient(RTSP_buffer **ppRtspList, int fd)
     	g_s32Maxfd = fd;
     }
 
-    /*初始化新添加的客户端*/
-    RTSP_initserver(pRtsp,fd);
+    /*初始化新添加的客户端*/   
+    pRtsp->fd = fd;
+    pRtsp->session_list = (RTSP_session *) calloc(1, sizeof(RTSP_session));
+    pRtsp->session_list->session_id = -1;
+    pRtsp->session_list->cur_state = INIT_STATE;
+    
+    memcpy(&pRtsp->stClientAddr,addr,sizeof(struct sockaddr));
+    
     fprintf(stderr,"Incoming RTSP connection accepted on socket: %d\n",pRtsp->fd);
 
 }
@@ -192,7 +242,7 @@ void AddClient(RTSP_buffer **ppRtspList, int fd)
  * return RTSP_interlvd_rcvd (2) if a complete RTP/RTCP interleaved packet is present.
  * terminate on really ugly cases.
  */
-int RTSP_full_msg_rcvd(RTSP_buffer *rtsp, int *hdr_len, int *body_len)
+int RTSP_full_msg_rcvd(RTSP_client *rtsp, int *hdr_len, int *body_len)
 {
     int eomh;    /* end of message header found */
 	int mb;       /* message body exists */
@@ -341,7 +391,7 @@ int RTSP_full_msg_rcvd(RTSP_buffer *rtsp, int *hdr_len, int *body_len)
  * return	0 是客户端发送的请求
  *			1 是服务器返回的响应
  */
-int RTSP_valid_response_msg(unsigned short *status, RTSP_buffer * rtsp)
+int RTSP_valid_response_msg(unsigned short *status, RTSP_client * rtsp)
 {
     char ver[32], trash[15];
     unsigned int stat;
@@ -381,13 +431,18 @@ int RTSP_valid_response_msg(unsigned short *status, RTSP_buffer * rtsp)
     *status = stat;
     return 1;
 }
+
+
 /**************************************************************************************************
 **
-**
+**   方法 URI RTSP版本 CR LF 
+    消息头 CR LF
+    CR LF 
+    消息体 CR LF 
 **
 **************************************************************************************************/
 //返回请求方法类型，出错返回-1
-int RTSP_validate_method(RTSP_buffer * pRtsp)
+int RTSP_validate_method(RTSP_client * pRtsp)
 {
     char method[32], hdr[16];
     char object[256];
@@ -396,9 +451,10 @@ int RTSP_validate_method(RTSP_buffer * pRtsp)
     int pcnt;   /* parameter count */
     int mid = ERR_GENERIC;
 	char *p; //=======增加
-	char trash[255];   //===增加
+	char tmp[255];   //===增加
 
-    *method = *object = '\0';
+    memset(method,0,sizeof(method));
+    memset(object,0,sizeof(object));
     seq = 0;
 
     /*按照请求消息的格式解析消息的第一行*/
@@ -411,57 +467,49 @@ int RTSP_validate_method(RTSP_buffer * pRtsp)
 		printf("hdr:%s\n",hdr);		
 	   	return ERR_GENERIC;
 	}
-	
 
-    /*如果没有头标记，则错误*/
-/*	
-    if ( !strstr(hdr, HDR_CSEQ) ){
-		printf("no HDR_CSEQ err_generic");
-	   	return ERR_GENERIC;	
-	}
-*/
-//===========加
-	if ((p = strstr(pRtsp->in_buffer, "CSeq")) == NULL) {
+    //提取cseq
+    if ((p = strstr(pRtsp->in_buffer, HDR_CSEQ)) == NULL) {
 		return ERR_GENERIC;
 	}else {
-		if(sscanf(p,"%254s %d",trash,&seq)!=2){
+	    memset(tmp,0,sizeof(tmp));
+		if(sscanf(p,"%254s %d",tmp,&seq)!=2){
 			return ERR_GENERIC;
 		}
 	}
-//==========
 
     /*根据不同的方法，返回响应的方法ID*/
     if (strcmp(method, RTSP_METHOD_DESCRIBE) == 0) {
         mid = RTSP_ID_DESCRIBE;
     }
-    if (strcmp(method, RTSP_METHOD_ANNOUNCE) == 0) {
+    else if (strcmp(method, RTSP_METHOD_ANNOUNCE) == 0) {
         mid = RTSP_ID_ANNOUNCE;
     }
-    if (strcmp(method, RTSP_METHOD_GET_PARAMETERS) == 0) {
+    else if (strcmp(method, RTSP_METHOD_GET_PARAMETERS) == 0) {
         mid = RTSP_ID_GET_PARAMETERS;
     }
-    if (strcmp(method, RTSP_METHOD_OPTIONS) == 0) {
+    else if (strcmp(method, RTSP_METHOD_OPTIONS) == 0) {
         mid = RTSP_ID_OPTIONS;
     }
-    if (strcmp(method, RTSP_METHOD_PAUSE) == 0) {
+    else if (strcmp(method, RTSP_METHOD_PAUSE) == 0) {
         mid = RTSP_ID_PAUSE;
     }
-    if (strcmp(method, RTSP_METHOD_PLAY) == 0) {
+    else if (strcmp(method, RTSP_METHOD_PLAY) == 0) {
         mid = RTSP_ID_PLAY;
     }
-    if (strcmp(method, RTSP_METHOD_RECORD) == 0) {
+    else if (strcmp(method, RTSP_METHOD_RECORD) == 0) {
         mid = RTSP_ID_RECORD;
     }
-    if (strcmp(method, RTSP_METHOD_REDIRECT) == 0) {
+    else if (strcmp(method, RTSP_METHOD_REDIRECT) == 0) {
         mid = RTSP_ID_REDIRECT;
     }
-    if (strcmp(method, RTSP_METHOD_SETUP) == 0) {
+    else if (strcmp(method, RTSP_METHOD_SETUP) == 0) {
         mid = RTSP_ID_SETUP;
     }
-    if (strcmp(method, RTSP_METHOD_SET_PARAMETER) == 0) {
+    else if (strcmp(method, RTSP_METHOD_SET_PARAMETER) == 0) {
         mid = RTSP_ID_SET_PARAMETER;
     }
-    if (strcmp(method, RTSP_METHOD_TEARDOWN) == 0) {
+    else if (strcmp(method, RTSP_METHOD_TEARDOWN) == 0) {
         mid = RTSP_ID_TEARDOWN;
     }
 
@@ -554,121 +602,7 @@ char *GetSdpId(char *buffer)
 **
 **
 **************************************************************************************************/
-void GetSdpDescr(RTSP_buffer * pRtsp, char *pDescr, char *s8Str)
-{
-/*/=====================================
-	char const* const SdpPrefixFmt =
-			"v=0\r\n"	//版本信息
-			"o=- %s %s IN IP4 %s\r\n" //<用户名><会话id><版本>//<网络类型><地址类型><地址>
-			"c=IN IP4 %s\r\n"		//c=<网络信息><地址信息><连接地址>对ip4为0.0.0.0  here！
-			"s=RTSP Session\r\n"		//会话名session id
-			"i=N/A\r\n"		//会话信息
-			"t=0 0\r\n"		//<开始时间><结束时间>
-			"a=recvonly\r\n"
-			"m=video %s RTP/AVP 96\r\n\r\n";	//<媒体格式><端口><传送><格式列表,即媒体净荷类型> m=video 5004 RTP/AVP 96
-			
-	struct ifreq stIfr;
-	char pSdpId[128];
 
-	//获取本机地址
-	strcpy(stIfr.ifr_name, "eth0");
-	if(ioctl(pRtsp->fd, SIOCGIFADDR, &stIfr) < 0)
-	{
-		//printf("Failed to get host eth0 ip\n");
-		strcpy(stIfr.ifr_name, "wlan0");
-		if(ioctl(pRtsp->fd, SIOCGIFADDR, &stIfr) < 0)
-		{
-			printf("Failed to get host eth0 or wlan0 ip\n");
-		}
-	}
-
-	sock_ntop_host(&stIfr.ifr_addr, sizeof(struct sockaddr), s8Str, 128);
-
-	GetSdpId(pSdpId);
-
-	sprintf(pDescr,  SdpPrefixFmt,  pSdpId,  pSdpId,  s8Str,  inet_ntoa(((struct sockaddr_in *)(&pRtsp->stClientAddr))->sin_addr), "5006", "H264");
-			"b=RR:0\r\n"
-			 //按spydroid改
-			"a=rtpmap:96 %s/90000\r\n"		//a=rtpmap:<净荷类型><编码名>/<时钟速率> 	a=rtpmap:96 H264/90000
-			"a=fmtp:96 packetization-mode=1;profile-level-id=1EE042;sprop-parameter-sets=QuAe2gLASRA=,zjCkgA==\r\n"
-			"a=control:trackID=0\r\n";
-	
-#ifdef RTSP_DEBUG
-//			printf("SDP:\n%s\n", pDescr);
-#endif
-*/
-	char pSdpId[128];
-	char rtp_port[5];
-
-	getlocaladdr(s8Str);
-
-	GetSdpId(pSdpId);
-	memset(pSdpId,0,sizeof(pSdpId));
-	strcpy(pSdpId,"3603282");
-	strcpy(pDescr, "v=0\r\n");	
-	strcat(pDescr, "o=-");
-	strcat(pDescr, pSdpId);
-	strcat(pDescr," ");
-	strcat(pDescr, pSdpId);
-	strcat(pDescr," IN IP4 ");
-	strcat(pDescr, s8Str);
-
-	strcat(pDescr, "\r\n");
-	strcat(pDescr, "s=xucheng rtsp server\r\n");
-	strcat(pDescr, "i=N/A\r\n");
-
-   	strcat(pDescr, "c=");
-   	strcat(pDescr, "IN ");		/* Network type: Internet. */
-   	strcat(pDescr, "IP4 ");		/* Address type: IP4. */
-	//strcat(pDescr, get_address());
-	strcat(pDescr, inet_ntoa(((struct sockaddr_in *)(&pRtsp->stClientAddr))->sin_addr));
-	strcat(pDescr, "\r\n");
-	
-   	strcat(pDescr, "t=0 0\r\n");	
-	strcat(pDescr, "a=range:npt=0-\r\n");
-	/**** media specific ****/
-	strcat(pDescr,"m=");
-	strcat(pDescr,"video ");
-	sprintf(rtp_port,"%d",get_avaiable_RTP_port());
-	strcat(pDescr, rtp_port);
-	strcat(pDescr," RTP/AVP "); /* Use UDP */
-	strcat(pDescr,"96\r\n");
-	//strcat(pDescr, "\r\n");
-	strcat(pDescr,"b=RR:0\r\n");
-		/**** Dynamically defined payload ****/
-		strcat(pDescr,"a=rtpmap:96");
-		strcat(pDescr," ");	
-		strcat(pDescr,"H264/90000");
-		strcat(pDescr, "\r\n");
-		strcat(pDescr,"a=fmtp:96 packetization-mode=1;");
-		strcat(pDescr,"profile-level-id=");
-		strcat(pDescr,psp.base64profileid);
-//		strcat(pDescr,";sprop-parameter-sets=");
-//		strcat(pDescr,psp.base64sps);
-//		strcat(pDescr,",");
-//		strcat(pDescr,psp.base64pps);
-//		strcat(pDescr,";");
-		strcat(pDescr, "\r\n");
-		strcat(pDescr,"a=control:trackID=0");
-		strcat(pDescr, "\r\n");
-
-printf("\n\n%s,%d===>psp.base64profileid=%s,psp.base64sps=%s,psp.base64pps=%s\n\n",__FUNCTION__,__LINE__,psp.base64profileid,psp.base64sps,psp.base64pps);
-
-		
-/*
-		strcat(pDescr, "m=audio ");
-		strcat(pDescr,"5004");
-		strcat(pDescr," RTP/AVP 96\r\n");
-		strcat(pDescr, "b=AS:128\r\n");
-		strcat(pDescr, "b=RR:0\r\n");
-		strcat(pDescr, "a=rtpmap:96 AMR/8000\r\n");
-		strcat(pDescr, "a=fmtp:96 octrt-align=1;\r\n");
-		strcat(pDescr,"a=control:trackID=1");
-		strcat(pDescr, "\r\n");
-*/
-		//strcat(pDescr, "\r\n");
-		//printf("0\r\n");
-}
 /**************************************************************************************************
 **
 **
@@ -698,7 +632,7 @@ void add_time_stamp(char *b, int crlf)
 **
 **
 **************************************************************************************************/
-int SendDescribeReply(RTSP_buffer * rtsp, char *object, char *descr, char *s8Str)
+int SendDescribeReply(RTSP_client * rtsp, char *object, char *descr, char *s8Str)
 {
     char *pMsgBuf;            /* 用于获取响应缓冲指针*/
     int s32MbLen;
@@ -745,13 +679,12 @@ int SendDescribeReply(RTSP_buffer * rtsp, char *object, char *descr, char *s8Str
 **
 **************************************************************************************************/
 //describe处理
-int RTSP_describe(RTSP_buffer * pRtsp)
+int RTSP_describe(RTSP_client * pRtsp)
 {
 	char object[255], trash[255];
-	char *p;
 	unsigned short port;
 	char s8Url[255];
-	char s8Descr[MAX_DESCR_LENGTH];
+	char s8Descr[1024];
 	char server[128];
 	char s8Str[128] = {0};
 
@@ -785,25 +718,6 @@ int RTSP_describe(RTSP_buffer * pRtsp)
 			break;
 	}
 
-	/*取得序列号,并且必须有这个选项*/
-	if ((p = strstr(pRtsp->in_buffer, HDR_CSEQ)) == NULL)
-	{
-		fprintf(stderr, "Error %s,%i\n", __FILE__, __LINE__);
-		send_reply(400, 0, pRtsp);  /* Bad Request */
-		printf("get serial num error");
-		return ERR_NOERROR;
-	}
-	else
-	{
-		if (sscanf(p, "%254s %d", trash, &(pRtsp->rtsp_cseq)) != 2)
-		{
-			fprintf(stderr, "Error %s,%i\n", __FILE__, __LINE__);
-			send_reply(400, 0, pRtsp);   /*请求错误*/
-			printf("get serial num 2 error");
-			return ERR_NOERROR;
-		}
-	}
-
 	//获取SDP内容
 	GetSdpDescr(pRtsp, s8Descr, s8Str);
 	//发送Describe响应
@@ -818,20 +732,15 @@ int RTSP_describe(RTSP_buffer * pRtsp)
 **
 **************************************************************************************************/
 //发送options处理后的响应
-int send_options_reply(RTSP_buffer * pRtsp, long cseq)
+int send_options_reply(RTSP_client * pRtsp, long cseq)
 {
     char r[1024];
-    sprintf(r, "%s %d %s"RTSP_EL"CSeq: %ld"RTSP_EL, RTSP_VER, 200, get_stat(200), cseq);
+    memset(r,0,sizeof(r));
+    snprintf(r,sizeof(r), "%s %d %s"RTSP_EL"CSeq: %ld"RTSP_EL, RTSP_VER, 200, get_stat(200), cseq);
     strcat(r, "Public: OPTIONS,DESCRIBE,SETUP,PLAY,PAUSE,TEARDOWN"RTSP_EL);
     strcat(r, RTSP_EL);
 
-    bwrite(r, (unsigned short) strlen(r), pRtsp);
-
-#ifdef RTSP_DEBUG
-//	fprintf(stderr ,"SERVER SEND Option Replay: %s\n", r);
-#endif
-
-    return ERR_NOERROR;
+    return bwrite(r, (unsigned short) strlen(r), pRtsp);
 }
 /**************************************************************************************************
 **
@@ -839,35 +748,10 @@ int send_options_reply(RTSP_buffer * pRtsp, long cseq)
 **
 **************************************************************************************************/
 //options处理
-int RTSP_options(RTSP_buffer * pRtsp)
+int RTSP_options(RTSP_client * pRtsp)
 {
-    char *p;
-    char trash[255];
     unsigned int cseq;
     char method[255], url[255], ver[255];
-
-#ifdef RTSP_DEBUG
-//	trace_point();
-#endif
-
-    /*序列号*/
-    if ((p = strstr(pRtsp->in_buffer, HDR_CSEQ)) == NULL)
-    {
-    	fprintf(stderr, "Error %s,%i\n", __FILE__, __LINE__);
-        send_reply(400, 0, pRtsp);/* Bad Request */
-		printf("serial num error");
-        return ERR_NOERROR;
-    }
-    else
-    {
-        if (sscanf(p, "%254s %d", trash, &(pRtsp->rtsp_cseq)) != 2)
-        {
-        	fprintf(stderr, "Error %s,%i\n", __FILE__, __LINE__);
-            send_reply(400, 0, pRtsp);/* Bad Request */
-			printf("serial num 2 error");
-            return ERR_NOERROR;
-        }
-    }
 
     cseq = pRtsp->rtsp_cseq;
 
@@ -886,13 +770,19 @@ int RTSP_options(RTSP_buffer * pRtsp)
 **
 **
 **************************************************************************************************/
-int send_setup_reply(RTSP_buffer *pRtsp, RTSP_session *pSession, RTP_session *pRtpSes)
+int send_setup_reply(RTSP_client *pRtsp, RTSP_session *pSession, RTP_session *pRtpSes)
 {
 	char s8Str[1024];
-	sprintf(s8Str, "%s %d %s"RTSP_EL"CSeq: %ld"RTSP_EL"Server: %s/%s"RTSP_EL, RTSP_VER,\
+	int offset = 0 , total;
+	total = sizeof(s8Str);
+	
+	memset(s8Str,0,sizeof(s8Str));
+	snprintf(s8Str+offset,total-offset, "%s %d %s"RTSP_EL"CSeq: %ld"RTSP_EL"Server: %s/%s"RTSP_EL, RTSP_VER,\
 			200, get_stat(200), (long int)pRtsp->rtsp_cseq, PACKAGE, VERSION);
 	add_time_stamp(s8Str, 0);
-	sprintf(s8Str + strlen(s8Str), "Session: %d"RTSP_EL"Transport: ", (pSession->session_id));
+
+	offset = strlen(s8Str);
+	snprintf(s8Str +offset ,total-offset, "Session: %d"RTSP_EL"Transport: ", (pSession->session_id));
 
     switch (pRtpSes->transport.type)
     {
@@ -903,15 +793,18 @@ int send_setup_reply(RTSP_buffer *pRtsp, RTSP_session *pSession, RTP_session *pR
 			}
 			else
 			{
-				sprintf(s8Str + strlen(s8Str), "RTP/AVP;unicast;client_port=%d-%d;server_port=", \
+                offset = strlen(s8Str);
+				snprintf(s8Str + offset,total-offset, "RTP/AVP;unicast;client_port=%d-%d;server_port=", \
 						pRtpSes->transport.u.udp.cli_ports.RTP, pRtpSes->transport.u.udp.cli_ports.RTCP);
 			}
 
-			sprintf(s8Str + strlen(s8Str), "%d-%d"RTSP_EL, pRtpSes->transport.u.udp.ser_ports.RTP, pRtpSes->transport.u.udp.ser_ports.RTCP);
+            offset = strlen(s8Str);
+			snprintf(s8Str + offset,total-offset, "%d-%d"RTSP_EL, pRtpSes->transport.u.udp.ser_ports.RTP, pRtpSes->transport.u.udp.ser_ports.RTCP);
 			break;
 
 		case RTP_rtp_avp_tcp:
-			sprintf(s8Str + strlen(s8Str), "RTP/AVP/TCP;interleaved=%d-%d"RTSP_EL, \
+            offset = strlen(s8Str);
+			snprintf(s8Str + offset,total-offset, "RTP/AVP/TCP;interleaved=%d-%d"RTSP_EL, \
 					pRtpSes->transport.u.tcp.interleaved.RTP, pRtpSes->transport.u.tcp.interleaved.RTCP);
 			break;
 
@@ -929,7 +822,7 @@ int send_setup_reply(RTSP_buffer *pRtsp, RTSP_session *pSession, RTP_session *pR
 **
 **
 **************************************************************************************************/
-int RTSP_setup(RTSP_buffer * pRtsp)
+int RTSP_setup(RTSP_client * pRtsp)
 {
 	char s8TranStr[255], *s8Str;
 	char *pStr;
@@ -940,7 +833,7 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 
 	if ((s8Str = strstr(pRtsp->in_buffer, HDR_TRANSPORT)) == NULL)
 	{
-		fprintf(stderr, "Error %s,%i\n", __FILE__, __LINE__);
+		fprintf(stderr, "Not Find %s in %s\n", HDR_TRANSPORT, pRtsp->in_buffer);
 		send_reply(406, 0, pRtsp);     // Not Acceptable
 		printf("not acceptable");
 		return ERR_NOERROR;
@@ -957,16 +850,12 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 
 	fprintf(stderr,"*** transport: %s ***\n", s8TranStr);
 
-	//如果需要增加一个会话
-	if ( !pRtsp->session_list )
-	{
-		pRtsp->session_list = (RTSP_session *) calloc(1, sizeof(RTSP_session));
-	}
 	rtsp_s = pRtsp->session_list;
-
+	
 	//建立一个新会话，插入到链表中
 	if (pRtsp->session_list->rtp_session == NULL)
 	{
+	    printf("New a rtp session\n");
 		pRtsp->session_list->rtp_session = (RTP_session *) calloc(1, sizeof(RTP_session));
 		rtp_s = pRtsp->session_list->rtp_session;
 	}
@@ -977,24 +866,24 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 			rtp_s_prec = rtp_s;
 		}
 		rtp_s_prec->next = (RTP_session *) calloc(1, sizeof(RTP_session));
+		if(rtp_s_prec->next == NULL)
+		{
+            fprintf(stderr,"[%s:%d] calloc error : %s\n",__FUNCTION__,__LINE__,strerror(errno));
+            for (rtp_s = rtsp_s->rtp_session; rtp_s != NULL; rtp_s = rtp_s->next)
+            {
+                rtp_s_prec = rtp_s;
+                free(rtp_s_prec);
+            }
+            return -1;
+		}
 		rtp_s = rtp_s_prec->next;
 	}
-
-/*
-	printf("\tFile Name %s\n", Object);
-	if((rtp_s->file_id = open(Object, O_RDONLY)) < 0)
-	{
-		printf("Open File error %s, %d\n", __FILE__, __LINE__);
-	}
-*/
-
 	//起始状态为暂停
 	rtp_s->pause = 1;
-
 	rtp_s->hndRtp = NULL;
-
 	Transport.type = RTP_no_transport;
 
+    //解析传输方式
 	if((pStr = strstr(s8TranStr, RTSP_RTP_AVP)))
 	{
 		//Transport: RTP/AVP
@@ -1022,7 +911,17 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 				}
 
 				//建立RTP套接字
-				rtp_s->hndRtp = (struct _tagStRtpHandle*)RtpCreate((unsigned int)(((struct sockaddr_in *)(&pRtsp->stClientAddr))->sin_addr.s_addr), Transport.u.udp.cli_ports.RTP, _h264nalu);
+				EmRtpPayload type;
+				if(strstr(pRtsp->in_buffer,"video"))
+				    type = _h264nalu;
+				if(strstr(pRtsp->in_buffer,"audio"))
+				#ifdef AUDIO_G711
+				    type = _g711;
+				#else
+				    type = _pcmu;
+				#endif
+				    
+				rtp_s->hndRtp = (struct _tagStRtpHandle*)RtpCreate((unsigned int)(((struct sockaddr_in *)(&pRtsp->stClientAddr))->sin_addr.s_addr), Transport.u.udp.cli_ports.RTP, type);
 				printf("<><><><>Creat RTP/UDP %p<><><><>\n",rtp_s->hndRtp);
 
 				Transport.u.udp.is_multicast = 0;
@@ -1052,7 +951,7 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 
 			//建立RTP
 			rtp_s->hndRtp = (struct _tagStRtpHandle*)RtpCreateOverTcp(pRtsp->fd, _h264nalu);
-//			printf("<><><><>Creat RTP/TCP %p<><><><>\n",rtp_s->hndRtp);
+			printf("<><><><>Creat RTP/TCP %p<><><><>\n",rtp_s->hndRtp);
 			rtp_s->hndRtp->s32Sock = pRtsp->fd;
 			Transport.rtp_fd = pRtsp->fd;
 //			Transport.rtcp_fd_out = pRtsp->fd;
@@ -1095,6 +994,7 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 	pRtsp->session_list->rtp_session->sched_id = schedule_add(rtp_s);
 
 	send_setup_reply(pRtsp, rtsp_s, rtp_s);
+    printf("rtp_s sched_id is %d\n",pRtsp->session_list->rtp_session->sched_id);
 
 	return ERR_NOERROR;
 }
@@ -1103,16 +1003,17 @@ int RTSP_setup(RTSP_buffer * pRtsp)
 **
 **
 **************************************************************************************************/
-int send_play_reply(RTSP_buffer * pRtsp, RTSP_session * pRtspSessn)
+int send_play_reply(RTSP_client * pRtsp, RTSP_session * pRtspSessn)
 {
 	char s8Str[1024];
-	char s8Temp[30];
+
+	memset(s8Str,0,sizeof(s8Str));
 	sprintf(s8Str, "%s %d %s"RTSP_EL"CSeq: %d"RTSP_EL"Server: %s/%s"RTSP_EL, RTSP_VER, 200,\
 			get_stat(200), pRtsp->rtsp_cseq, PACKAGE, VERSION);
 	add_time_stamp(s8Str, 0);
 
-	sprintf(s8Temp, "Session: %d"RTSP_EL, pRtspSessn->session_id);
-	strcat(s8Str, s8Temp);
+    int offset = strlen(s8Str);
+	snprintf(s8Str+offset,sizeof(s8Str)-offset, "Session: %d"RTSP_EL, pRtspSessn->session_id);
 	strcat(s8Str, RTSP_EL);
 
 	bwrite(s8Str, (unsigned short) strlen(s8Str), pRtsp);
@@ -1124,30 +1025,13 @@ int send_play_reply(RTSP_buffer * pRtsp, RTSP_session * pRtspSessn)
 **
 **
 **************************************************************************************************/
-int RTSP_play(RTSP_buffer * pRtsp)
+int RTSP_play(RTSP_client * pRtsp)
 {
 	char *pStr;
 	char pTrash[128];
 	long int s32SessionId;
 	RTSP_session *pRtspSesn;
 	RTP_session *pRtpSesn;
-
-	//获取CSeq
-	if ((pStr = strstr(pRtsp->in_buffer, HDR_CSEQ)) == NULL)
-	{
-		send_reply(400, 0, pRtsp);   /* Bad Request */
-		printf("get CSeq!!400");
-		return ERR_NOERROR;
-	}
-	else
-	{
-		if (sscanf(pStr, "%127s %d", pTrash, &(pRtsp->rtsp_cseq)) != 2)
-		{
-			send_reply(400, 0, pRtsp);    /* Bad Request */
-			printf("get CSeq!! 2 400");
-			return ERR_NOERROR;
-		}
-	}
 
 	//获取session
 	if ((pStr = strstr(pRtsp->in_buffer, HDR_SESSION)) != NULL)
@@ -1166,24 +1050,6 @@ int RTSP_play(RTSP_buffer * pRtsp)
 		return ERR_NOERROR;
 	}
 
-	//时间参数,假设都是 0-0,不做设置
-/*	if ((pStr = strstr(pRtsp->in_buffer, HDR_RANGE)) != NULL)
-	{
-		if((pStrTime = strstr(pRtsp->in_buffer, "npt")) != NULL)
-		{
-			if((pStrTime = strstr(pStrTime, "=")) == NULL)
-			{
-				send_reply(400, 0, pRtsp);// Bad Request
-				return ERR_NOERROR;
-			}
-
-		}
-		else
-		{
-
-		}
-	}
-*/
 	//播放list指向的rtp session
 	pRtspSesn = pRtsp->session_list;
 	if (pRtspSesn != NULL)
@@ -1242,18 +1108,20 @@ int RTSP_play(RTSP_buffer * pRtsp)
 **
 **
 **************************************************************************************************/
-int send_teardown_reply(RTSP_buffer * pRtsp, long SessionId, long cseq)
+int send_teardown_reply(RTSP_client * pRtsp, long SessionId, long cseq)
 {
     char s8Str[1024];
     char s8Temp[30];
 
+    memset(s8Str,0,sizeof(s8Str));
     // 构建回复消息
-    sprintf(s8Str, "%s %d %s"RTSP_EL"CSeq: %ld"RTSP_EL"Server: %s/%s"RTSP_EL, RTSP_VER,\
+    snprintf(s8Str,sizeof(s8Str), "%s %d %s"RTSP_EL"CSeq: %ld"RTSP_EL"Server: %s/%s"RTSP_EL, RTSP_VER,\
     		200, get_stat(200), cseq, PACKAGE, VERSION);
     //添加时间戳
     add_time_stamp(s8Str, 0);
     //会话ID
-    sprintf(s8Temp, "Session: %ld"RTSP_EL, SessionId);
+    memset(s8Temp,0,sizeof(s8Temp));
+    snprintf(s8Temp,sizeof(s8Temp), "Session: %ld"RTSP_EL, SessionId);
     strcat(s8Str, s8Temp);
 
     strcat(s8Str, RTSP_EL);
@@ -1269,30 +1137,13 @@ int send_teardown_reply(RTSP_buffer * pRtsp, long SessionId, long cseq)
 **
 **
 **************************************************************************************************/
-int RTSP_teardown(RTSP_buffer * pRtsp)
+int RTSP_teardown(RTSP_client * pRtsp)
 {
 	char *pStr;
 	char pTrash[128];
 	long int s32SessionId;
 	RTSP_session *pRtspSesn;
 	RTP_session *pRtpSesn;
-
-	//获取CSeq
-	if ((pStr = strstr(pRtsp->in_buffer, HDR_CSEQ)) == NULL)
-	{
-		send_reply(400, 0, pRtsp);   // Bad Request
-		printf("get CSeq error");
-		return ERR_NOERROR;
-	}
-	else
-	{
-		if (sscanf(pStr, "%127s %d", pTrash, &(pRtsp->rtsp_cseq)) != 2)
-		{
-			send_reply(400, 0, pRtsp);    // Bad Request
-			printf("get CSeq 2 error");
-			return ERR_NOERROR;
-		}
-	}
 
 	//获取session
 	if ((pStr = strstr(pRtsp->in_buffer, HDR_SESSION)) != NULL)
@@ -1365,11 +1216,11 @@ int RTSP_teardown(RTSP_buffer * pRtsp)
 **
 **************************************************************************************************/
 /*rtsp状态机，服务器端*/
-void RTSP_state_machine(RTSP_buffer * pRtspBuf, int method)
+void RTSP_state_machine(RTSP_client * pRtspBuf, int method)
 {
 
 #ifdef RTSP_DEBUG
-	trace_point();
+    trace_point();
 #endif
 
     /*除了播放过程中发送的最后一个数据流，
@@ -1382,7 +1233,7 @@ void RTSP_state_machine(RTSP_buffer * pRtspBuf, int method)
     char trash[255];
     char szDebug[255];
 
-    /*找到会话位置*/
+    /*提取sessioon字段*/
     if ((s = strstr(pRtspBuf->in_buffer, HDR_SESSION)) != NULL)
     {
         if (sscanf(s, "%254s %ld", trash, &session_id) != 2)
@@ -1400,166 +1251,74 @@ void RTSP_state_machine(RTSP_buffer * pRtspBuf, int method)
         return;
     }
 
-#ifdef RTSP_DEBUG
-    sprintf(szDebug,"state_machine:current state is  ");
-    strcat(szDebug,((pRtspSess->cur_state==0)?"init state":((pRtspSess->cur_state==1)?"ready state":"play state")));
-    printf("%s\n", szDebug);
-#endif
-
-    /*根据状态迁移规则，从当前状态开始迁移*/
-    switch (pRtspSess->cur_state)
+    switch (method)
     {
-        case INIT_STATE:                    /*初始态*/
-        {
-#ifdef RTSP_DEBUG
-        	fprintf(stderr,"current method code is:  %d  \n",method);
-#endif
-            switch (method)
+        case RTSP_ID_OPTIONS:
+            if (RTSP_options(pRtspBuf) != ERR_NOERROR)
             {
-                case RTSP_ID_DESCRIBE:  //状态不变
-                    RTSP_describe(pRtspBuf);
-					//printf("3\r\n");
-                    break;
-
-                case RTSP_ID_SETUP:                //状态变为就绪态
-					//printf("4\r\n");
-                  if (RTSP_setup(pRtspBuf) == ERR_NOERROR)
-                    {
-						//printf("5\r\n");
-                    	pRtspSess->cur_state = READY_STATE;
-                        fprintf(stderr,"TRANSFER TO READY STATE!\n");
-                    }
-                    break;
-
-                case RTSP_ID_TEARDOWN:       //状态不变
-                    RTSP_teardown(pRtspBuf);
-                    break;
-
-                case RTSP_ID_OPTIONS:
-                    if (RTSP_options(pRtspBuf) == ERR_NOERROR)
-                    {
-                    	pRtspSess->cur_state = INIT_STATE;         //状态不变
-                    }
-                    break;
-
-                case RTSP_ID_PLAY:          //method not valid this state.
-
-                case RTSP_ID_PAUSE:
-                    send_reply(455, 0, pRtspBuf);
-                    break;
-
-                default:
-                    send_reply(501, 0, pRtspBuf);
-                    break;
-            }
-        break;
-        }
-
-        case READY_STATE:
-        {
-#ifdef RTSP_DEBUG
-            fprintf(stderr,"current method code is:%d\n",method);
-#endif
-
-            switch (method)
-            {
-                case RTSP_ID_PLAY:                                      //状态迁移为播放态
-                   if (RTSP_play(pRtspBuf) == ERR_NOERROR)
-                    {
-                        fprintf(stderr,"\tStart Playing!\n");
-                        pRtspSess->cur_state = PLAY_STATE;
-                    }
-                    break;
-
-                case RTSP_ID_SETUP:
-                    if (RTSP_setup(pRtspBuf) == ERR_NOERROR)    //状态不变
-                    {
-                        pRtspSess->cur_state = READY_STATE;
-                    }
-                    break;
-
-                case RTSP_ID_TEARDOWN:
-                    RTSP_teardown(pRtspBuf);                 //状态变为初始态 ?
-                    break;
-
-                case RTSP_ID_OPTIONS:
-                    if (RTSP_options(pRtspBuf) == ERR_NOERROR)
-                    {
-                        pRtspSess->cur_state = INIT_STATE;          //状态不变
-                    }
-                    break;
-
-                case RTSP_ID_PAUSE:         			// method not valid this state.
-                    send_reply(455, 0, pRtspBuf);
-                    break;
-
-                case RTSP_ID_DESCRIBE:
-                    RTSP_describe(pRtspBuf);
-                    break;
-
-                default:
-                    send_reply(501, 0, pRtspBuf);
-                    break;
-            }
-
+                send_reply(455, 0, pRtspBuf);
+                pRtspSess->cur_state = -1;
+            }else
+                pRtspSess->cur_state = RTSP_ID_OPTIONS;
             break;
-        }
-
-
-        case PLAY_STATE:
-        {
-            switch (method)
+        case RTSP_ID_DESCRIBE:  //状态不变
+            if( RTSP_describe(pRtspBuf) != ERR_NOERROR)
             {
-                case RTSP_ID_PLAY:
-                    // Feature not supported
-                    fprintf(stderr,"UNSUPPORTED: Play while playing.\n");
-                    send_reply(551, 0, pRtspBuf);        // Option not supported
-                    break;
-/*				//不支持暂停命令
-                case RTSP_ID_PAUSE:              	//状态变为就绪态
-                    if (RTSP_pause(pRtspBuf) == ERR_NOERROR)
-                    {
-                    	pRtspSess->cur_state = READY_STATE;
-                    }
-                    break;
-*/
-                case RTSP_ID_TEARDOWN:
-                    RTSP_teardown(pRtspBuf);        //状态迁移为初始态
-                    break;
-
-                case RTSP_ID_OPTIONS:
-                    RTSP_options(pRtspBuf);
-					break;
-
-                case RTSP_ID_DESCRIBE:
-                    RTSP_describe(pRtspBuf);
-                    break;
-
-                case RTSP_ID_SETUP:
-                    break;
-            }
-
+                send_reply(455, 0, pRtspBuf);
+                pRtspSess->cur_state = -1;
+            }else
+                pRtspSess->cur_state = RTSP_ID_DESCRIBE;
             break;
-        }/* PLAY state */
+        case RTSP_ID_SETUP:                //状态变为就绪态
+          if (RTSP_setup(pRtspBuf) != ERR_NOERROR)
+            {
+                pRtspSess->cur_state = -1;
+                fprintf(stderr,"TRANSFER TO READY STATE!\n");
+            }else
+                pRtspSess->cur_state = RTSP_ID_SETUP;
+            break;
+        case RTSP_ID_TEARDOWN:       //状态不变
+            if(RTSP_teardown(pRtspBuf) != ERR_NOERROR)
+            {
+                pRtspSess->cur_state = -1;
+                fprintf(stderr,"TRANSFER TO READY STATE!\n");
+            }else
+                pRtspSess->cur_state = RTSP_ID_TEARDOWN;
+            break;
+
+        case RTSP_ID_PLAY:          //method not valid this state.
+            if(RTSP_play(pRtspBuf) != ERR_NOERROR)
+            {
+                pRtspSess->cur_state = -1;
+                fprintf(stderr,"TRANSFER TO READY STATE!\n");
+            }else
+                pRtspSess->cur_state = RTSP_ID_PLAY;
+            break;
+        case RTSP_ID_PAUSE:
+            if(RTSP_teardown(pRtspBuf) != ERR_NOERROR)
+            {
+                pRtspSess->cur_state = -1;
+                fprintf(stderr,"TRANSFER TO READY STATE!\n");
+            }else
+                pRtspSess->cur_state = RTSP_ID_PAUSE;
+            break;
 
         default:
-            {
-                /* invalid/unexpected current state. */
-                fprintf(stderr,"%s State error: unknown state=%d, method code=%d\n", __FUNCTION__, pRtspSess->cur_state, method);
-            }
+            fprintf(stderr,"%s State error: unknown state=%d, method code=%d\n", __FUNCTION__, pRtspSess->cur_state, method);
+            send_reply(501, 0, pRtspBuf);
+            pRtspSess->cur_state = -1;
             break;
-    }/* end of current state switch */
+    }
 
-#ifdef RTSP_DEBUG
-    printf("leaving rtsp_state_machine!\n");
-#endif
+    return ;
 }
+
 /**************************************************************************************************
 **
 **
 **
 **************************************************************************************************/
-void RTSP_remove_msg(int len, RTSP_buffer * rtsp)
+void RTSP_remove_msg(int len, RTSP_client * rtsp)
 {
     rtsp->in_size -= len;
     if (rtsp->in_size && len)
@@ -1574,13 +1333,9 @@ void RTSP_remove_msg(int len, RTSP_buffer * rtsp)
 **
 **
 **************************************************************************************************/
-void RTSP_discard_msg(RTSP_buffer * rtsp)
+void RTSP_discard_msg(RTSP_client * rtsp)
 {
     int hlen, blen;
-
-#ifdef RTSP_DEBUG
-//	trace_point();
-#endif
 
     //找出缓冲区中首个消息的长度，然后删除
     if (RTSP_full_msg_rcvd(rtsp, &hlen, &blen) > 0)
@@ -1591,32 +1346,29 @@ void RTSP_discard_msg(RTSP_buffer * rtsp)
 **
 **
 **************************************************************************************************/
-int RTSP_handler(RTSP_buffer *pRtspBuf)
+int RTSP_handler(RTSP_client *pRtspBuf)
 {
-	int s32Meth;
-
-#ifdef RTSP_DEBUG
-//	trace_point();
-#endif
-
+	int methodId;
+    assert(pRtspBuf);
 	while(pRtspBuf->in_size)
 	{
-		s32Meth = RTSP_validate_method(pRtspBuf);
-		if (s32Meth < 0)
+		methodId = RTSP_validate_method(pRtspBuf);
+		if (methodId < 0)
 		{
 			//错误的请求，请求的方法不存在
 			fprintf(stderr,"Bad Request %s,%d\n", __FILE__, __LINE__);
-			printf("bad request, requestion not exit %d",s32Meth);
+			printf("bad request, requestion not exit %d",methodId);
 			send_reply(400, NULL, pRtspBuf);
 		}
 		else
 		{
 			//进入到状态机，处理接收的请求
-			RTSP_state_machine(pRtspBuf, s32Meth);
+			RTSP_state_machine(pRtspBuf, methodId);
 //			printf("exit Rtsp_state_machine\r\n");
 		}
 		//丢弃处理之后的消息
-		RTSP_discard_msg(pRtspBuf);
+//		RTSP_discard_msg(pRtspBuf);
+        pRtspBuf->in_size = 0;
 //		printf("4\r\n");
 	}
 	return ERR_NOERROR;
@@ -1624,9 +1376,9 @@ int RTSP_handler(RTSP_buffer *pRtspBuf)
 /**************************************************************************************************
 **
 **
-**
+**处理每个client
 **************************************************************************************************/
-int RtspServer(RTSP_buffer *rtsp)
+int RtspServer(RTSP_client *rtsp)
 {
 	fd_set rset,wset;       /*读写I/O描述集*/
 	struct timeval t;
@@ -1634,13 +1386,6 @@ int RtspServer(RTSP_buffer *rtsp)
 	static char buffer[RTSP_BUFFERSIZE+1]; /* +1 to control the final '\0'*/
 	int n;
 	int res;
-	struct sockaddr ClientAddr;
-
-#ifdef RTSP_DEBUG
-//    fprintf(stderr, "%s, %d\n", __FUNCTION__, __LINE__);
-#endif
-
-//    memset((void *)&ClientAddr,0,sizeof(ClientAddr));
 
 	if (rtsp == NULL)
 	{
@@ -1673,7 +1418,7 @@ int RtspServer(RTSP_buffer *rtsp)
 #ifdef RTSP_DEBUG
 //    fprintf(stderr, "tcp_read, %d\n", __LINE__);
 #endif
-		n= tcp_read(rtsp->fd, buffer, size, &ClientAddr);
+		n= tcp_read(rtsp->fd, buffer, size);
 		if (n==0)
 		{
 			return ERR_CONNECTION_CLOSE;
@@ -1695,7 +1440,7 @@ int RtspServer(RTSP_buffer *rtsp)
 		}
 
 #ifdef RTSP_DEBUG
-		fprintf(stderr,"<<<<<<<<<<<<<<<<<<<<<\n%s \n<<<<<<<<<<<<<<<<<<<<<\n", buffer);
+		fprintf(stderr,">>>>>>>>>>>>>> RECVED(%d)\n%s \n",n, buffer);
 #endif
 
 		/*填充数据*/
@@ -1703,8 +1448,6 @@ int RtspServer(RTSP_buffer *rtsp)
 		rtsp->in_size+=n;
 		//清空buffer
 		memset(buffer, 0, n);
-		//添加客户端地址信息
-		memcpy(	&rtsp->stClientAddr, &ClientAddr, sizeof(ClientAddr));
 
 		/*处理缓冲区的数据，进行rtsp处理*/
 		if ((res=RTSP_handler(rtsp))==ERR_GENERIC)
@@ -1748,10 +1491,10 @@ int RtspServer(RTSP_buffer *rtsp)
 **
 **
 **************************************************************************************************/
-void ScheduleConnections(RTSP_buffer **rtsp_list)
+void ScheduleConnections()
 {
     int res;
-    RTSP_buffer *pRtsp=*rtsp_list,*pRtspN=NULL;
+    RTSP_client *pRtsp=pRtspListHead,*pRtspN=NULL;
     RTP_session *r=NULL, *t=NULL;
 
     while (pRtsp!=NULL)
@@ -1797,25 +1540,15 @@ void ScheduleConnections(RTSP_buffer **rtsp_list)
                 // wait for
                 close(pRtsp->fd);
                 num_conn--;
-
-                /*释放rtsp缓冲区*/
-                if (pRtsp==*rtsp_list)
-                {
-                	//链表第一个元素就出错，则pRtspN为空
-					printf("first error,pRtsp is null\n");
-                    *rtsp_list=pRtsp->next;
-                    free(pRtsp);
-                    pRtsp=*rtsp_list;
-                }
-                else
-                {
-                	//不是链表中的第一个，则把当前出错任务删除，并把next任务存放在pRtspN(上一个没有出错的任务)
-                	//指向的next，和当前需要处理的pRtsp中.
-					printf("dell current fd:%d\n",pRtsp->fd);
-                	pRtspN->next=pRtsp->next;
-                    free(pRtsp);
-                    pRtsp=pRtspN->next;
-                }
+                
+            	pRtspN = pRtsp;
+                pRtsp = pRtsp->next;
+                    
+                RemoveClient(&pRtspListHead,pRtspN);
+                pthread_mutex_lock(&serverInfo.lock);
+                serverInfo.s32ConCnt--;
+                pthread_mutex_unlock(&serverInfo.lock);
+                
 
             }
             else
@@ -1826,10 +1559,8 @@ void ScheduleConnections(RTSP_buffer **rtsp_list)
         }
         else
         {
-			//printf("6\r\n");
         	//没有出错
         	//上一个处理没有出错的list存放在pRtspN中,需要处理的任务放在pRtst中
-        	pRtspN = pRtsp;
             pRtsp = pRtsp->next;
         }
     }
@@ -1844,74 +1575,71 @@ void ScheduleConnections(RTSP_buffer **rtsp_list)
 void RTP_port_pool_init(int port)
 {
     int i;
-    s_u32StartPort = port;
+    serverInfo.s_u32StartPort = port;
     for (i=0; i<MAX_CONNECTION; ++i)
     {
-    	s_uPortPool[i] = i*2+s_u32StartPort;
+    	serverInfo.s_uPortPool[i] = i*2+port;
     }
 }
 
-static RTSP_buffer *pRtspList=NULL; // 链表管理客户
-static int s32ConCnt = 0;//已经连接的客户端数
-static pthread_mutex_t lock ;
-void *ScheduleConnection_Proc(void *arg)
+
+static void *ScheduleConnection_Proc(void *arg)
 {
 	struct timespec ts = { 0, 0 };
-	ts.tv_nsec = 10000000;		/* nanoseconds */
+	ts.tv_nsec = 10000000;		/* nanoseconds  -- 100ms */
 	
+    prctl(PR_SET_NAME, "ScheduleConnection_Proc");
+    
 	int Clients=0;
-	while(!g_s32Quit)
+	while(!serverInfo.g_s32Quit)
 	{
-		pthread_mutex_lock(&lock);
-		Clients = s32ConCnt;
-		pthread_mutex_unlock(&lock);
+		pthread_mutex_lock(&serverInfo.lock);
+		Clients = serverInfo.s32ConCnt;
+		pthread_mutex_unlock(&serverInfo.lock);
 
 		if(Clients)
 		{
 			/*对已有的连接进行调度*/
-			ScheduleConnections(&pRtspList);
+			ScheduleConnections();
 		}
 		nanosleep(&ts, NULL);	
 	}
 	return (void *)0;
 }
 
-int HandleClientConnection(int clientfd)
+int HandleClientConnection(int clientfd , struct sockaddr *addr)
 {
 	unsigned int u32FdFound;
-	RTSP_buffer *p=NULL;
+	RTSP_client *p=NULL;
 	
-	
-	/*处理新创建的连接*/
-	if (clientfd >= 0)
+
+	/*查找列表中是否存在此连接的socket*/
+	for (u32FdFound=0,p=pRtspListHead; p!=NULL; p=p->next)
 	{
-		/*查找列表中是否存在此连接的socket*/
-		for (u32FdFound=0,p=pRtspList; p!=NULL; p=p->next)
+		if (p->fd == clientfd)
 		{
-			if (p->fd == clientfd)
-			{
-				u32FdFound=1;
-				break;
-			}
+			u32FdFound=1;
+			break;
 		}
-		if (!u32FdFound)
+	}
+	
+	if (!u32FdFound)
+	{
+		/*创建一个连接，增加一个客户端*/
+		if (serverInfo.s32ConCnt<MAX_CONNECTION)
 		{
-			/*创建一个连接，增加一个客户端*/
-			if (s32ConCnt<MAX_CONNECTION)
-			{
-				pthread_mutex_lock(&lock);
-				++s32ConCnt;
-				AddClient(&pRtspList,clientfd);
-				pthread_mutex_unlock(&lock);
-			}
-			else
-			{
-				fprintf(stderr, "exceed the MAX client, ignore this connecting\n");
-				return -1;
-			}
-			num_conn++;
-			fprintf(stderr, "%s Connection reached: %d\n", __FUNCTION__, num_conn);
+			pthread_mutex_lock(&serverInfo.lock);
+			++serverInfo.s32ConCnt;
+			AddClient(&pRtspListHead,clientfd,addr);
+			pthread_mutex_unlock(&serverInfo.lock);
 		}
+		else
+		{
+			fprintf(stderr, "exceed the MAX client, ignore this connecting\n");
+			return -1;
+		}
+		num_conn++;
+		fprintf(stderr, "%s Connection reached: %d\n", __FUNCTION__, num_conn);
 	}
 
 	return 0;
@@ -1921,26 +1649,15 @@ int HandleClientConnection(int clientfd)
 **
 **
 **************************************************************************************************/
-int EventLoop(int s32MainFd)
+int rtspLoop(int s32MainFd)
 {
-//	static unsigned int s32ChdCnt=0;
 	int ret;
 	fd_set rset,errset;		/*读写I/O描述集*/
 	struct timeval tv;
 
-	
-	pthread_mutex_init(&lock,NULL);
-	/*用于数据流分发*/
-	pthread_t tid;
-	if(pthread_create(&tid,NULL,ScheduleConnection_Proc,NULL) < 0)
+    
+	while(!serverInfo.g_s32Quit)
 	{
-		fprintf(stderr,"pthread_create ScheduleConnection_Proc error:%s\n",strerror(errno));
-		return -1;
-	}
-
-	while(!g_s32Quit)
-	{
-
 		/*变量初始化*/
 		FD_ZERO(&rset);
 		FD_SET(s32MainFd,&rset);
@@ -1958,18 +1675,16 @@ int EventLoop(int s32MainFd)
 				fprintf(stderr,"select error %s %d : %s\n", __FILE__, __LINE__,strerror(errno));
 				return ERR_GENERIC; //errore interno al server
 			case 0:
-#ifdef DEBUG
-				printf("%s %d select timeout \n",__FILE__, __LINE__);
-				printf("start New selcet\n");
-#endif	
 				break;
 			default:
 				/*套接字可读*/
 				if(FD_ISSET(s32MainFd,&rset))
 				{
 					/*接收连接，创建一个新的socket*/
-					int s32Fd= tcp_accept(s32MainFd);
-					HandleClientConnection(s32Fd);
+					struct sockaddr addr;
+					int s32Fd= tcp_accept(s32MainFd,&addr);
+					if(s32Fd)
+    					HandleClientConnection(s32Fd,&addr);
 				}
 
 				/*套接字出错*/
@@ -1994,7 +1709,7 @@ int EventLoop(int s32MainFd)
 void IntHandl(int i)
 {	
 	stop_schedule = 1;
-	g_s32Quit = 1;
+	serverInfo.g_s32Quit = 1;
 }
 /**************************************************************************************************
 **
@@ -2117,6 +1832,119 @@ void UpdatePps(unsigned char *data,int len)
 	base64_encode2((char *)data, len, psp.base64pps, 512);
 	#endif
 
+}
+
+
+/**************************************************************************************************
+**
+**
+**
+**************************************************************************************************/
+int rtspInit(void)
+{
+    if(serverInfo.init)
+    {
+        printf("already init\n");
+        return 0;
+    }
+
+    printf("sizeof RTSP_client is %d\n",sizeof(RTSP_client));
+	memset(&serverInfo,0,sizeof(RtspServer_t));
+	
+	//初始化锁
+	pthread_mutex_init(&serverInfo.lock,NULL);
+	
+	//申请缓冲区
+//	ringmalloc(576);
+	printf("RTSP server START\n");
+
+	//rtsp server 初始化
+
+	//创建TCP 监听套接字
+	serverInfo.s32MainFd = tcp_listen(SERVER_RTSP_PORT_DEFAULT);
+
+//	/*创建后台线程schedule_do 用于处理客户数据 */
+//	if (ScheduleInit() != 0)
+//	{
+//		fprintf(stderr,"Fatal: Can't start scheduler %s, %i \nServer is aborting.\n", __FILE__, __LINE__);
+//		return 0;
+//	}
+
+	//rtp 端口初始化
+	RTP_port_pool_init(RTP_DEFAULT_PORT);
+
+	printf("The Server quit!\n");
+	displayInfo();
+
+    serverInfo.s_u32StartPort = RTP_DEFAULT_PORT;
+    serverInfo.init = 1;
+	return 0;
+}
+
+int rtspStart()
+{
+    if(serverInfo.init != 1)
+    {
+        printf("please call rtspInit first\n");
+        return -1;
+    }
+	printf("start EventLoop\n");
+    
+    serverInfo.g_s32Quit = 0;
+    
+	/*用于数据流分发*/
+	pthread_t tid;
+	if(pthread_create(&tid,NULL,ScheduleConnection_Proc,NULL) < 0)
+	{
+		fprintf(stderr,"pthread_create ScheduleConnection_Proc error:%s\n",strerror(errno));
+		return -1;
+	}
+
+	//用于管理客户端接入
+	rtspLoop(serverInfo.s32MainFd);	//等待事件
+
+	ringfree();
+
+    return 0;
+}
+
+
+int PutH264DataToBuffer(uint8_t *data , int size , int iframe)
+{
+    int type = _h264;
+    
+	if(iframe)
+	{
+        type = FRAME_TYPE_I;
+		extract_spspps(data,size);
+	}
+	else
+		type = FRAME_TYPE_P;
+
+     ringput(data,size,type);
+	return 0;
+}
+
+int PutPCMDataToBuffer(char *data , int size )
+{
+    int type;
+    unsigned int g711Len = 0;
+    unsigned char *g711Data = (unsigned char *)malloc(size * 3);//g711转pcm最多两倍
+    if(g711Data == NULL){
+        fprintf(stderr,"[%s:%d] malloc error : %s\n",__FUNCTION__,__LINE__,strerror(errno));
+        return -1;
+    }
+	
+	g711_encode(G711_A_LAW, (unsigned short *)data, size, g711Data, &g711Len);
+
+#ifdef AUDIO_G711
+    type = _g711;
+    ringput(g711Data,g711Len,type);
+else
+    type = _PCMU;
+#endif
+    free(g711Data);
+	return 0;
 }
 
 

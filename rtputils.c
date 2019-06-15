@@ -274,7 +274,7 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize , RTP_sessi
 		
 		if(S->transport.type == RTP_rtp_avp_tcp )
 		{
-			if(bwrite(pSendBuf, s32Bytes,(RTSP_buffer *)S->priv) < 0)
+			if(bwrite(pSendBuf, s32Bytes,(RTSP_client *)S->priv) < 0)
 			{
 				s32Ret = -1;
 				goto cleanup;
@@ -333,7 +333,7 @@ static int SendNalu264(HndRtp hRtp, char *pNalBuf, int s32NalBufSize , RTP_sessi
             s32Bytes = s32Bytes + 14;
 			if(S->transport.type == RTP_rtp_avp_tcp )
 			{
-				if(bwrite(pSendBuf, s32Bytes,(RTSP_buffer *)S->priv) < 0)
+				if(bwrite(pSendBuf, s32Bytes,(RTSP_client *)S->priv) < 0)
 				{
 					s32Ret = -1;
 					goto cleanup;
@@ -377,6 +377,9 @@ static int SendNalu711(HndRtp hRtp, char *buf, int bufsize)
     int s32Bytes = 0;
     int s32Ret = 0;
 
+    if(buf == NULL || bufsize <= 0)
+        return -1;
+        
     pSendBuf = (char *)calloc(MAX_RTP_PKT_LENGTH + 100, sizeof(char));
     if(NULL == pSendBuf)
     {
@@ -425,7 +428,6 @@ unsigned int RtpSend(void *session, char *pData, int s32DataSize, unsigned long 
 	HndRtp hRtp = s->hndRtp;
 
     hRtp->u32TimeStampCurr = u32TimeStamp;
-
 
     if(_h264 == hRtp->emPayload)
     {
@@ -478,6 +480,12 @@ unsigned int RtpSend(void *session, char *pData, int s32DataSize, unsigned long 
         }
     }
     else if(_g711 == hRtp->emPayload)
+    {
+        if(SendNalu711(hRtp, pData, s32DataSize) == -1)
+        {
+            return -1;
+        }
+    }else if(_pcmu == hRtp->emPayload)
     {
         if(SendNalu711(hRtp, pData, s32DataSize) == -1)
         {

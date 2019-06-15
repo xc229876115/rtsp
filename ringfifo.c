@@ -10,27 +10,60 @@
 #include "rtspservice.h"
 #define NMAX 32
 
-int iput = 0; /* 环形缓冲区的当前放入位置 */
-int iget = 0; /* 缓冲区的当前取出位置 */
-int n = 0; /* 环形缓冲区中的元素总数量 */
+typedef struct {
+    char init;
+    pthread_mutex_t lock ;
+    int iput; /* 环形缓冲区的当前放入位置 */
+    int iget; /* 缓冲区的当前取出位置 */
+    int n; /* 环形缓冲区中的元素总数量 */
+}Ring_t;
+
+Ring_t gRing = {0};
 struct ringbuf ringfifo[NMAX];
 extern int UpdateSpsOrPps(unsigned char *data,int frame_type,int len);
 /* 环形缓冲区的地址编号计算函数，如果到达唤醒缓冲区的尾部，将绕回到头部。
 环形缓冲区的有效地址编号为：0到(NMAX-1)
 */
-void ringmalloc(int size)
+int ringmalloc(int bufSize)
 {
     int i;
+
+    if(gRing.init)
+        return 0;
+
+    memset(&gRing,0,sizeof(Ring_t));
+	pthread_mutex_init(&gRing.lock,NULL);	//初始化锁
+	
     for(i =0; i<NMAX; i++)
     {
-        ringfifo[i].buffer = malloc(size);
         ringfifo[i].size = 0;
         ringfifo[i].frame_type = 0;
-       // printf("FIFO INFO:idx:%d,len:%d,ptr:%x\n",i,ringfifo[i].size,(int)(ringfifo[i].buffer));
+        ringfifo[i].buffer = malloc(bufSize);
+        if(ringfifo[i].buffer == NULL)
+        {
+            fprintf(stderr,"[%s:%d] malloc error : %s\n",__FUNCTION__,__LINE__,strerror(errno));
+            goto err;
+        }
     }
-    iput = 0; /* 环形缓冲区的当前放入位置 */
-    iget = 0; /* 缓冲区的当前取出位置 */
-    n = 0; /* 环形缓冲区中的元素总数量 */
+
+    gRing.iput = 0; /* 环形缓冲区的当前放入位置 */
+    gRing.iget = 0; /* 缓冲区的当前取出位置 */
+    gRing.n = 0;    /* 环形缓冲区中的元素总数量 */
+    gRing.init = 1;
+
+    return 0;
+err:
+    for(i =0; i<NMAX; i++)
+    {
+
+        if(ringfifo[i].buffer)
+        {
+            free(ringfifo[i].buffer);
+            ringfifo[i].buffer = NULL;
+        }
+    }
+
+    return -1;
 }
 /**************************************************************************************************
 **
@@ -39,9 +72,12 @@ void ringmalloc(int size)
 **************************************************************************************************/
 void ringreset()
 {
-    iput = 0; /* 环形缓冲区的当前放入位置 */
-    iget = 0; /* 缓冲区的当前取出位置 */
-    n = 0; /* 环形缓冲区中的元素总数量 */
+    pthread_mutex_lock(&gRing.lock);
+    gRing.iput = 0; /* 环形缓冲区的当前放入位置 */
+    gRing.iget = 0; /* 缓冲区的当前取出位置 */
+    gRing.n    = 0; /* 环形缓冲区中的元素总数量 */
+    pthread_mutex_unlock(&gRing.lock);
+    return;
 }
 /**************************************************************************************************
 **
@@ -51,20 +87,28 @@ void ringreset()
 void ringfree(void)
 {
     int i;
-    printf("begin free mem\n");
-    for(i =0; i<NMAX; i++)
+    if(gRing.init)
     {
-       // printf("FREE FIFO INFO:idx:%d,len:%d,ptr:%x\n",i,ringfifo[i].size,(int)(ringfifo[i].buffer));
-        free(ringfifo[i].buffer);
-        ringfifo[i].size = 0;
+        pthread_mutex_lock(&gRing.lock);
+        for(i =0; i<NMAX; i++)
+        {
+            if(ringfifo[i].buffer)
+            {
+                free(ringfifo[i].buffer);
+                ringfifo[i].buffer = NULL;
+                ringfifo[i].size = 0;
+            }
+        }
+        pthread_mutex_unlock(&gRing.lock);
     }
+    return;
 }
 /**************************************************************************************************
 **
 **
 **
 **************************************************************************************************/
-int addring(int i)
+static int addring(int i)
 {
     return (i+1) == NMAX ? 0 : i+1;
 }
@@ -75,26 +119,30 @@ int addring(int i)
 **
 **************************************************************************************************/
 /* 从环形缓冲区中取一个元素 */
-
 int ringget(struct ringbuf *getinfo)
 {
     int Pos;
-    if(n>0)
+    int size = 0;
+    pthread_mutex_lock(&gRing.lock);
+    if(gRing.n>0 && gRing.init)
     {
-        Pos = iget;
-        iget = addring(iget);
-        n--;
+        Pos = gRing.iget;
+        gRing.iget = addring(gRing.iget);
+        gRing.n--;
         getinfo->buffer = (ringfifo[Pos].buffer);
         getinfo->frame_type = ringfifo[Pos].frame_type;
         getinfo->size = ringfifo[Pos].size;
-        //printf("Get FIFO INFO:idx:%d,len:%d,ptr:%x,type:%d\n",Pos,getinfo->size,(int)(getinfo->buffer),getinfo->frame_type);
-        return ringfifo[Pos].size;
+        size = ringfifo[Pos].size;
     }
     else
     {
+#ifdef DEBUG
         //printf("Buffer is empty\n");
-        return 0;
-    }
+#endif
+    }    
+    pthread_mutex_unlock(&gRing.lock);
+    
+    return size;
 }
 /**************************************************************************************************
 **
@@ -104,20 +152,18 @@ int ringget(struct ringbuf *getinfo)
 /* 向环形缓冲区中放入一个元素*/
 void ringput(unsigned char *buffer,int size,int encode_type)
 {
-
-    if(n<NMAX)
+    pthread_mutex_lock(&gRing.lock);
+    if(gRing.n<NMAX && gRing.init)
     {
+        int iput = gRing.iput;
         memcpy(ringfifo[iput].buffer,buffer,size);
         ringfifo[iput].size= size;
         ringfifo[iput].frame_type = encode_type;
-        //printf("Put FIFO INFO:idx:%d,len:%d,ptr:%x,type:%d\n",iput,ringfifo[iput].size,(int)(ringfifo[iput].buffer),ringfifo[iput].frame_type);
-        iput = addring(iput);
-        n++;
+        gRing.iput = addring(iput);
+        gRing.n++;
     }
-    else
-    {
-        //  printf("Buffer is full\n");
-    }
+    pthread_mutex_unlock(&gRing.lock);
+    return;
 }
 
 /**************************************************************************************************
@@ -317,27 +363,4 @@ void extract_spspps(uint8_t *data , int size )
 	return ;
 }
 
-int PutH264DataToBuffer(uint8_t *data , int size , int iframe)
-{
-
-    if(n<NMAX)
-    {
-		memcpy(ringfifo[iput].buffer,data,size);
-        ringfifo[iput].size= size;
-		if(iframe)
-		{
-			ringfifo[iput].frame_type = FRAME_TYPE_I;
-
-			extract_spspps(data,size);
-		}
-        	
-		else
-			ringfifo[iput].frame_type = FRAME_TYPE_P;
-
-        iput = addring(iput);
-        n++;
-    }
-
-	return 0;
-}
 

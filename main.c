@@ -63,7 +63,8 @@ void *thread_live_audio(void *arg)
 #if 0
         TUYA_APP_Put_Frame(E_CHANNEL_AUDIO,&pcm_frame);
 #endif 
-
+    
+		PutPCMDataToBuffer(audioBuf,size);
         int frameRate = AUDIO_FPS;
         int sleepTick = (int)(1000000.0/frameRate);
         usleep(sleepTick);
@@ -154,55 +155,137 @@ void *thread_live_video(void *arg)
     pthread_exit(0);
 }
 
-/**************************************************************************************************
-**
-**
-**
-**************************************************************************************************/
-int main(void)
+void GetSdpDescr(RTSP_client * pRtsp, char *pDescr, char *s8Str)
 {
-	int s32MainFd;
+/*/=====================================
+	char const* const SdpPrefixFmt =
+			"v=0\r\n"	//版本信息
+			"o=- %s %s IN IP4 %s\r\n" //<用户名><会话id><版本>//<网络类型><地址类型><地址>
+			"c=IN IP4 %s\r\n"		//c=<网络信息><地址信息><连接地址>对ip4为0.0.0.0  here！
+			"s=RTSP Session\r\n"		//会话名session id
+			"i=N/A\r\n"		//会话信息
+			"t=0 0\r\n"		//<开始时间><结束时间>
+			"a=recvonly\r\n"
+			"m=video %s RTP/AVP 96\r\n\r\n";	//<媒体格式><端口><传送><格式列表,即媒体净荷类型> m=video 5004 RTP/AVP 96
+			
+	struct ifreq stIfr;
+	char pSdpId[128];
 
-	//申请缓冲区
-	ringmalloc(720*576);
-	printf("RTSP server START\n");
+	//获取本机地址
+	strcpy(stIfr.ifr_name, "eth0");
+	if(ioctl(pRtsp->fd, SIOCGIFADDR, &stIfr) < 0)
+	{
+		//printf("Failed to get host eth0 ip\n");
+		strcpy(stIfr.ifr_name, "wlan0");
+		if(ioctl(pRtsp->fd, SIOCGIFADDR, &stIfr) < 0)
+		{
+			printf("Failed to get host eth0 or wlan0 ip\n");
+		}
+	}
 
-	//rtsp server 初始化
-	PrefsInit();
+	sock_ntop_host(&stIfr.ifr_addr, sizeof(struct sockaddr), s8Str, 128);
+
+	GetSdpId(pSdpId);
+
+	sprintf(pDescr,  SdpPrefixFmt,  pSdpId,  pSdpId,  s8Str,  inet_ntoa(((struct sockaddr_in *)(&pRtsp->stClientAddr))->sin_addr), "5006", "H264");
+			"b=RR:0\r\n"
+			 //按spydroid改
+			"a=rtpmap:96 %s/90000\r\n"		//a=rtpmap:<净荷类型><编码名>/<时钟速率> 	a=rtpmap:96 H264/90000
+			"a=fmtp:96 packetization-mode=1;profile-level-id=1EE042;sprop-parameter-sets=QuAe2gLASRA=,zjCkgA==\r\n"
+			"a=control:trackID=0\r\n";
 	
+#ifdef RTSP_DEBUG
+//			printf("SDP:\n%s\n", pDescr);
+#endif
+*/
+	char pSdpId[128];
+	char rtp_port[5];
+
+	getlocaladdr(s8Str);
+
+	GetSdpId(pSdpId);
+	memset(pSdpId,0,sizeof(pSdpId));
+	strcpy(pSdpId,"3603282");
+	strcpy(pDescr, "v=0\r\n");	
+	strcat(pDescr, "o=-");
+	strcat(pDescr, pSdpId);
+	strcat(pDescr," ");
+	strcat(pDescr, pSdpId);
+	strcat(pDescr," IN IP4 ");
+	strcat(pDescr, s8Str);
+
+	strcat(pDescr, "\r\n");
+	strcat(pDescr, "s=xucheng rtsp server\r\n");
+	strcat(pDescr, "i=N/A\r\n");
+
+   	strcat(pDescr, "c=");
+   	strcat(pDescr, "IN ");		/* Network type: Internet. */
+   	strcat(pDescr, "IP4 ");		/* Address type: IP4. */
+	//strcat(pDescr, get_address());
+	strcat(pDescr, inet_ntoa(((struct sockaddr_in *)(&pRtsp->stClientAddr))->sin_addr));
+	strcat(pDescr, "\r\n");
+	
+   	strcat(pDescr, "t=0 0\r\n");	
+	strcat(pDescr, "a=range:npt=0-\r\n");
+	/**** media specific ****/
+	strcat(pDescr,"m=");
+	strcat(pDescr,"video ");
+	sprintf(rtp_port,"%d",0);
+	strcat(pDescr, rtp_port);
+	strcat(pDescr," RTP/AVP "); /* Use UDP */
+	strcat(pDescr,"96\r\n");
+	//strcat(pDescr, "\r\n");
+	strcat(pDescr,"b=RR:0\r\n");
+		/**** Dynamically defined payload ****/
+		strcat(pDescr,"a=rtpmap:96");
+		strcat(pDescr," ");	
+		strcat(pDescr,"H264/90000");
+		strcat(pDescr, "\r\n");
+		strcat(pDescr,"a=fmtp:96 packetization-mode=1;");
+//		strcat(pDescr,"profile-level-id=");
+//		strcat(pDescr,psp.base64profileid);
+//		strcat(pDescr,";sprop-parameter-sets=");
+//		strcat(pDescr,psp.base64sps);
+//		strcat(pDescr,",");
+//		strcat(pDescr,psp.base64pps);
+//		strcat(pDescr,";");
+		strcat(pDescr, "\r\n");
+		strcat(pDescr,"a=control:video");
+		strcat(pDescr, "\r\n");
+
+//printf("\n\n%s,%d===>psp.base64profileid=%s,psp.base64sps=%s,psp.base64pps=%s\n\n",__FUNCTION__,__LINE__,psp.base64profileid,psp.base64sps,psp.base64pps);
+
+//        strcpy(pDescr, "m=audio 0 RTP/AVP 97\r\n"
+//           "c=IN IP4 0.0.0.0\r\n"
+//           "a=rtpmap:97 PCMU/8000/1\r\n"
+//           "a=control:audio\r\n"
+//           "a=range:npt=now-\r\n");	
+
+
+		//strcat(pDescr, "\r\n");
+		//printf("0\r\n");
+}
+
+
+int main()
+{
 	printf("listen for client connecting...\n");
 	signal(SIGINT, IntHandl);
 
-	//创建TCP 监听套接字
-	s32MainFd = tcp_listen(SERVER_RTSP_PORT_DEFAULT);
+    rtsp_server_param_s info;
+    info.get_sdp = GetSdpDescr;
+    rtspInit(&info);
 
-	/*创建后台线程schedule_do 用于处理客户数据 */
-	if (ScheduleInit() == ERR_FATAL)
-	{
-		fprintf(stderr,"Fatal: Can't start scheduler %s, %i \nServer is aborting.\n", __FILE__, __LINE__);
-		return 0;
-	}
+//    strcpy(s_raw_path,"./resource/");
+//    pthread_t h264_output_thread;
+//    pthread_create(&h264_output_thread, NULL, thread_live_video, NULL);
+//    pthread_detach(h264_output_thread);
 
-	//rtp 端口初始化
-	RTP_port_pool_init(RTP_DEFAULT_PORT);
-
-	strcpy(s_raw_path,"./resource/");
-    pthread_t h264_output_thread;
-    pthread_create(&h264_output_thread, NULL, thread_live_video, NULL);
-    pthread_detach(h264_output_thread);
-
-    pthread_t pcm_output_thread;
-    pthread_create(&pcm_output_thread, NULL, thread_live_audio, NULL);
-    pthread_detach(pcm_output_thread);
-
-
-	printf("start EventLoop\n");
-	//用于管理客户端接入
-	EventLoop(s32MainFd);	//等待事件
-
-	ringfree();
-	printf("The Server quit!\n");
-
-	return 0;
+//    pthread_t pcm_output_thread;
+//    pthread_create(&pcm_output_thread, NULL, thread_live_audio, NULL);
+//    pthread_detach(pcm_output_thread);
+    
+    rtspStart();
+    return 0;
 }
 

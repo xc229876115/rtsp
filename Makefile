@@ -9,7 +9,7 @@ CFLAGS	+= $(INCLUDE) -g -Wall
 CFLAGS	+=-DDEBUG
 LDFLAGS	+=$(LIBS)
 
-SRC	:=main.c ringfifo.c rtputils.c rtspservice.c rtsputils.c 
+SRC	:=main.c ringfifo.c rtputils.c rtspservice.c rtsputils.c g711_utils.c
 target := rtsp
 
 all:$(target)

@@ -5,11 +5,10 @@
 #include <sys/types.h>
 #include <math.h>
 #include <stdio.h>
+#include <sys/prctl.h>
+#include <assert.h>
 
 #define trace_point() 	do {printf("rtsp_tracepoint: %s,%s,%d\n",__FILE__,__FUNCTION__,__LINE__); } while(0)			//10728
-//#define trace_sleep() 	do {printf("rtsp_tracesleep: %s,%d\n",__FILE__,__LINE__); sleep(1);} while(0)  //10728
-//#define cz_trace		printf																		//10728
-//#define cz_trip	 		do {printf("!CAUTION!-CZ_TRIP-: %s,%d\n",__FILE__,__LINE__); } while(0)		//10728
 
 /*error codes define,yanf*/
 #define ERR_NOERROR          0
@@ -25,58 +24,57 @@
 #define ERR_CONNECTION_CLOSE        -10
 
 /* 消息头关键字 */
-#define HDR_CONTENTLENGTH "Content-Length"
-#define HDR_ACCEPT "Accept"
-#define HDR_ALLOW "Allow"
-#define HDR_BLOCKSIZE "Blocksize"
-#define HDR_CONTENTTYPE "Content-Type"
-#define HDR_DATE "Date"
-#define HDR_REQUIRE "Require"
-#define HDR_TRANSPORTREQUIRE "Transport-Require"
-#define HDR_SEQUENCENO "SequenceNo"
-#define HDR_CSEQ "CSeq"
-#define HDR_STREAM "Stream"
-#define HDR_SESSION "Session"
-#define HDR_TRANSPORT "Transport"
-#define HDR_RANGE "Range"
-#define HDR_USER_AGENT "User-Agent"
+#define HDR_CONTENTLENGTH       "Content-Length"
+#define HDR_ACCEPT              "Accept"
+#define HDR_ALLOW               "Allow"
+#define HDR_BLOCKSIZE           "Blocksize"
+#define HDR_CONTENTTYPE         "Content-Type"
+#define HDR_DATE                "Date"
+#define HDR_REQUIRE             "Require"
+#define HDR_TRANSPORTREQUIRE    "Transport-Require"
+#define HDR_SEQUENCENO          "SequenceNo"
+#define HDR_CSEQ                "CSeq"
+#define HDR_STREAM              "Stream"
+#define HDR_SESSION             "Session"
+#define HDR_TRANSPORT           "Transport"
+#define HDR_RANGE               "Range"
+#define HDR_USER_AGENT          "User-Agent"
 
 
 /*rtsp方法*/
-#define RTSP_METHOD_MAXLEN 15
-#define RTSP_METHOD_DESCRIBE "DESCRIBE"
-#define RTSP_METHOD_ANNOUNCE "ANNOUNCE"
-#define RTSP_METHOD_GET_PARAMETERS "GET_PARAMETERS"
-#define RTSP_METHOD_OPTIONS "OPTIONS"
-#define RTSP_METHOD_PAUSE "PAUSE"
-#define RTSP_METHOD_PLAY "PLAY"
-#define RTSP_METHOD_RECORD "RECORD"
-#define RTSP_METHOD_REDIRECT "REDIRECT"
-#define RTSP_METHOD_SETUP "SETUP"
-#define RTSP_METHOD_SET_PARAMETER "SET_PARAMETER"
-#define RTSP_METHOD_TEARDOWN "TEARDOWN"
+#define RTSP_METHOD_MAXLEN          15
+#define RTSP_METHOD_DESCRIBE        "DESCRIBE"
+#define RTSP_METHOD_ANNOUNCE        "ANNOUNCE"
+#define RTSP_METHOD_GET_PARAMETERS  "GET_PARAMETERS"
+#define RTSP_METHOD_OPTIONS         "OPTIONS"
+#define RTSP_METHOD_PAUSE           "PAUSE"
+#define RTSP_METHOD_PLAY            "PLAY"
+#define RTSP_METHOD_RECORD          "RECORD"
+#define RTSP_METHOD_REDIRECT        "REDIRECT"
+#define RTSP_METHOD_SETUP           "SETUP"
+#define RTSP_METHOD_SET_PARAMETER   "SET_PARAMETER"
+#define RTSP_METHOD_TEARDOWN        "TEARDOWN"
 
 
 /*rtsp方法记号ID*/
-#define RTSP_ID_DESCRIBE 0
-#define RTSP_ID_ANNOUNCE 1
-#define RTSP_ID_GET_PARAMETERS 2
-#define RTSP_ID_OPTIONS 3
-#define RTSP_ID_PAUSE 4
-#define RTSP_ID_PLAY 5
-#define RTSP_ID_RECORD 6
-#define RTSP_ID_REDIRECT 7
-#define RTSP_ID_SETUP 8
-#define RTSP_ID_SET_PARAMETER 9
-#define RTSP_ID_TEARDOWN 10
+#define RTSP_ID_DESCRIBE        0
+#define RTSP_ID_ANNOUNCE        1
+#define RTSP_ID_GET_PARAMETERS  2
+#define RTSP_ID_OPTIONS         3
+#define RTSP_ID_PAUSE           4
+#define RTSP_ID_PLAY            5
+#define RTSP_ID_RECORD          6
+#define RTSP_ID_REDIRECT        7
+#define RTSP_ID_SETUP           8
+#define RTSP_ID_SET_PARAMETER   9
+#define RTSP_ID_TEARDOWN        10
 
 /*		RTSP 相关		*/
-#define RTSP_not_full 0
-#define RTSP_method_rcvd 1
-#define RTSP_interlvd_rcvd 2
+#define RTSP_not_full       0
+#define RTSP_method_rcvd    1
+#define RTSP_interlvd_rcvd  2
 
-#define RTSP_BUFFERSIZE 4096
-#define MAX_DESCR_LENGTH 4096
+#define RTSP_BUFFERSIZE     1024
 
 /* Stati della macchina a stati del server rtsp*/
 #define INIT_STATE      0
@@ -146,35 +144,34 @@ typedef struct _RTSP_session {
     struct _RTSP_session *next; /*下一个会话的指针，构成链表结构*/
 } RTSP_session;
 
-typedef struct _RTSP_buffer {
+typedef struct _RTSP_client {
     int fd;    /*socket文件描述符*/
     unsigned int port;/*端口号*/
 
     struct sockaddr stClientAddr;
 
-    char in_buffer[RTSP_BUFFERSIZE];/*接收缓冲区*/
+    char in_buffer[2048];/*接收缓冲区*/
     unsigned int in_size;/*接收缓冲区的大小*/
-    char out_buffer[RTSP_BUFFERSIZE+MAX_DESCR_LENGTH];/*发送缓冲区*/
+    char out_buffer[RTSP_BUFFERSIZE];/*发送缓冲区*/
     int out_size;/*发送缓冲区大小*/
 
     unsigned int rtsp_cseq;/*序列号*/
-    char descr[MAX_DESCR_LENGTH];/*描述*/
     RTSP_session *session_list;/*会话链表*/
-    struct _RTSP_buffer *next; /*指向下一个结构体，构成了链表结构*/
-} RTSP_buffer;
+    struct _RTSP_client *next; /*指向下一个结构体，构成了链表结构*/
+} RTSP_client;
 
 /*			tcp相关				*/
 char *sock_ntop_host(const struct sockaddr *sa, socklen_t salen, char *str, size_t len);
-int tcp_accept(int fd);
+int tcp_accept(int fd, struct sockaddr *Addr);
 int tcp_connect(unsigned short port, char *addr);
 int tcp_listen(unsigned short port);
-int tcp_read(int fd, void *buffer, int nbytes, struct sockaddr *Addr);
+int tcp_read(int fd, void *buffer, int nbytes);
 int tcp_send(int fd, void *dataBuf, unsigned int dataSize);
 int tcp_write(int fd, char *buffer, int nbytes);
 
 /*			schedule相关				*/
-#define MAX_PROCESS	1/*number of fork*/
-#define MAX_CONNECTION	10/*rtsp connection*/
+#define MAX_PROCESS	1   /*number of fork*/
+#define MAX_CONNECTION	3 /*rtsp connection*/
 //#define ONE_FORK_MAX_CONNECTION ((int)(MAX_CONNECTION/MAX_PROCESS))/*rtsp connection for one fork*/
 
 typedef struct _play_args
@@ -197,7 +194,6 @@ typedef struct _schedule_list
 } stScheList;
 
 int ScheduleInit();
-void *schedule_do(void *nothing);
 int schedule_add(RTP_session *rtp_session/*,RTSP_session *rtsp_session*/);
 int schedule_start(int id,stPlayArgs *args);
 void schedule_stop(int id);
@@ -230,8 +226,8 @@ typedef struct _StServPrefs {
     unsigned int max_session;
 } StServPrefs;
 
-int send_reply(int err, char *addon, RTSP_buffer * rtsp);
-int bwrite(char *buffer, unsigned short len, RTSP_buffer * rtsp);
+int send_reply(int err, char *addon, RTSP_client * rtsp);
+int bwrite(char *buffer, unsigned short len, RTSP_client * rtsp);
 const char *get_stat(int err);
 
 #endif

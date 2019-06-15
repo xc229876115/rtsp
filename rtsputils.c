@@ -10,6 +10,7 @@
 #include <sys/time.h>
 #include <ifaddrs.h>  
 #include <fcntl.h>
+#include <errno.h>
 
 #include "rtspservice.h"
 #include "rtsputils.h"
@@ -75,20 +76,21 @@ char *sock_ntop_host(const struct sockaddr *sa, socklen_t salen, char *str, size
     return (NULL);
 }
 
-int tcp_accept(int fd)
+int tcp_accept(int fd , struct sockaddr *addr)
 {
     int f;
-     struct sockaddr_in addr;;
-    socklen_t addrlen = sizeof(addr);
+    socklen_t addrlen = sizeof(struct sockaddr);
 
-    memset(&addr,0,sizeof(addr));
-    addrlen=sizeof(addr);
+    memset(addr,0,addrlen);
 
     /*接收连接，创建一个新的socket,返回其描述符*/
-    f = accept(fd, (struct sockaddr *)&addr, &addrlen);
-
-	if(f)
-	    printf("New Client %s fd = %d is connected !\n",inet_ntoa(addr.sin_addr),f);
+    f = accept(fd, addr, &addrlen);
+	if(f){
+	    char addr_str[128];
+	    memset(addr_str,0,sizeof(addr_str));
+	    sock_ntop_host(addr,addrlen,addr_str,sizeof(addr_str));
+	    printf("New Client %s fd = %d is connected !\n",addr_str,f);
+	}
 
     return f;
 }
@@ -135,6 +137,7 @@ int tcp_connect(unsigned short port, char *addr)
     return f;
 }
 
+//监听套接字
 int tcp_listen(unsigned short port)
 {
     int f;
@@ -172,7 +175,7 @@ int tcp_listen(unsigned short port)
     }
 
     /*监听*/
-    if(listen(f, SOMAXCONN) < 0)
+    if(listen(f, MAX_CONNECTION) < 0)
     {
         fprintf(stderr, "listen() error in tcp_listen.\n");
         return -1;
@@ -181,29 +184,10 @@ int tcp_listen(unsigned short port)
     return f;
 }
 
-int tcp_read(int fd, void *buffer, int nbytes, struct sockaddr *Addr)
+int tcp_read(int fd, void *buffer, int nbytes )
 {
     int n;
-    socklen_t Addrlen = sizeof(struct sockaddr);
-    char addr_str[128];
-    //fprintf(stderr, "readaddr:%s ", sock_ntop_host(Addr, Addrlen, addr_str, sizeof(addr_str)) );
-    //fprintf(stderr, "readPort:%d\n",ntohs(((struct sockaddr_in *)Addr)->sin_port));
     n=recv(fd, buffer, nbytes, 0);
-    //printf ("read count:%d\n",n);
-    if(n>0)
-    {
-        //获取对方IP信息
-        if(getpeername(fd, Addr, &Addrlen) < 0)
-        {
-            fprintf(stderr,"error getperrname:%s %i\n", __FILE__, __LINE__);
-        }
-        else
-        {
-            //打印出IP和port
-            fprintf(stderr, "%s ", sock_ntop_host(Addr, Addrlen, addr_str, sizeof(addr_str)));
-            fprintf(stderr, "Port:%d\n",ntohs(((struct sockaddr_in *)Addr)->sin_port));
-        }
-    }
 
     return n;
 }
@@ -244,43 +228,26 @@ int tcp_write(int connectSocketId, char *dataBuf, int dataSize)
 }
 
 /*      schedule 相关     */
-static stScheList sched[MAX_CONNECTION];
+static stScheList gSched[MAX_CONNECTION];
+static pthread_mutex_t sc_lock ;
 
 int stop_schedule = 0;//是否退出schedule
 int num_conn = 2;    /*连接个数*/
 
-int ScheduleInit()
-{
-    int i;
-    pthread_t thread=0;
-	char addr[33] ={0};
-	getlocaladdr(addr);
-	printf("#### %s\n",addr);
-    /*初始化数据*/
-    for(i=0; i<MAX_CONNECTION; ++i)
-    {
-        sched[i].rtp_session=NULL;
-        sched[i].play_action=NULL;
-        sched[i].valid=0;
-        sched[i].BeginFrame=0;
-    }
 
-    /*创建处理主线程*/
-    pthread_create(&thread,NULL,schedule_do,NULL);
-
-    return 0;
-}
 
 /*负责buffer 数据流发送*/
-void *schedule_do(void *arg)
+static void *schedule_do(void *arg)
 {
     int i=0;
     struct timeval now;
     uint64_t mnow;
-    struct timespec ts = {0,33333};
+    struct timespec ts = {0,33333}; //30fps
     int s32FindNal = 0;
     int ringbuflen=0;
     struct ringbuf ringinfo;
+    
+    prctl(PR_SET_NAME, "schedule_do");
 //=====================
 #ifdef RTSP_DEBUG
     printf("The pthread %s start\n", __FUNCTION__);
@@ -294,7 +261,7 @@ void *schedule_do(void *arg)
         s32FindNal = 0;
 
         //如果有客户端连接，则g_s32DoPlay大于零
-      //  if(g_s32DoPlay>0)
+        if(g_s32DoPlay>0)
         {
             ringbuflen = ringget(&ringinfo);
             if(ringbuflen ==0)
@@ -303,40 +270,42 @@ void *schedule_do(void *arg)
         s32FindNal = 1;
         for(i=0; i<MAX_CONNECTION; ++i)
         {
-            if(sched[i].valid)
+        
+    		pthread_mutex_lock(&sc_lock);
+            stScheList *sched = &gSched[i];
+            pthread_mutex_unlock(&sc_lock);
+            if(sched->valid)
             {
-#ifdef DEBUG
-	           	printf("start send data , session pause = %d\n",sched[i].rtp_session->pause);
-#endif
-                if(!sched[i].rtp_session->pause)
+                if(!sched->rtp_session->pause)
                 {
                     //计算时间戳
                     gettimeofday(&now,NULL);
                     mnow = (now.tv_sec*1000 + now.tv_usec/1000);//毫秒
 #ifdef DEBUG
-	                printf("hndRtp is  %p , s32FindNal= %d \n",sched[i].rtp_session->hndRtp,s32FindNal);
+//	                printf("hndRtp is  %p , s32FindNal= %d \n",sched[i].rtp_session->hndRtp,s32FindNal);
 #endif
-                    if((sched[i].rtp_session->hndRtp)&&(s32FindNal))
+                    if((sched->rtp_session->hndRtp)&&(s32FindNal))
                     {
-		
+                        if(sched->rtp_session->hndRtp->emPayload & ringinfo.frame_type)
+		                {
 #ifdef DEBUG
 						if(ringinfo.frame_type ==FRAME_TYPE_I)
-						printf("send i frame,length:%d,pointer:%p,timestamp:%lu\n",ringinfo.size,ringinfo.buffer,mnow);
+						printf("send frame type %d, frame,length:%d,pointer:%p,timestamp:%lu\n",ringinfo.frame_type,ringinfo.size,ringinfo.buffer,mnow);
 #endif
                         if(ringinfo.frame_type ==FRAME_TYPE_I)
                             sched[i].BeginFrame=1;
                         //if(sched[i].BeginFrame== 1)
-                            int ret = sched[i].play_action((sched[i].rtp_session), (char *)ringinfo.buffer, ringinfo.size, mnow);
+                            int ret = sched->play_action((sched[i].rtp_session), (char *)ringinfo.buffer, ringinfo.size, mnow);
 							if(ret < 0){
 								printf("play action is %d\n",ret);
+							}
 							}
                     }
                 }
             }
 
         }
-        //============add================
-        //===============================
+
     }
     while(!stop_schedule);
 
@@ -354,33 +323,70 @@ void *schedule_do(void *arg)
 int schedule_add(RTP_session *rtp_session)
 {
     int i;
+    int ret = ERR_GENERIC;
+    return ret;
+    printf("schedule add rtp session is %p\n",rtp_session);
+    pthread_mutex_lock(&sc_lock);
     for(i=0; i<MAX_CONNECTION; ++i)
     {
         /*需是还没有被加入到调度队列中的会话*/
-        if(!sched[i].valid)
+        if(!gSched[i].valid)
         {
-            sched[i].valid=1;
-            sched[i].rtp_session=rtp_session;
+            gSched[i].valid=1;
+            gSched[i].rtp_session=rtp_session;
 
             //设置播放动作
-            sched[i].play_action=RtpSend;
+            gSched[i].play_action=RtpSend;
             printf("**adding a schedule object action %s,%d**\n", __FILE__, __LINE__);
-
-            return i;
+            printf("schedule add rtp session is %p\n",gSched[i].rtp_session);
+            ret = i;
+            break;
         }
     }
-    return ERR_GENERIC;
+    
+    pthread_mutex_unlock(&sc_lock);
+    return ;
+}
+
+int ScheduleInit()
+{
+    int i;
+    pthread_t thread=0;
+    
+	//初始化锁
+	pthread_mutex_init(&sc_lock,NULL);
+	
+    /*初始化数据*/
+    for(i=0; i<MAX_CONNECTION; ++i)
+    {
+        gSched[i].rtp_session=NULL;
+        gSched[i].play_action=NULL;
+        gSched[i].valid=0;
+        gSched[i].BeginFrame=0;
+    }
+
+    /*创建处理主线程*/
+    int ret = pthread_create(&thread,NULL,schedule_do,NULL);
+    if(ret < 0){
+        printf("pthread create err : %s\n",strerror(errno));
+        return -1;
+    }
+
+    return 0;
 }
 
 int schedule_start(int id,stPlayArgs *args)
 {
+    printf("id is %d\n",id);
+    if(id < 0 || id >= MAX_CONNECTION)
+        return -1;
     /*    struct timeval now;
         double mnow;
         gettimeofday(&now,NULL);
         mnow=(double)now.tv_sec*1000+(double)now.tv_usec/1000;
     */
-    sched[id].rtp_session->pause=0;
-    sched[id].rtp_session->started=1;
+    gSched[id].rtp_session->pause=0;
+    gSched[id].rtp_session->started=1;
 
     //播放状态,大于零则表示有客户端播放文件
     g_s32DoPlay++;
@@ -396,36 +402,49 @@ void schedule_stop(int id)
 
 int schedule_remove(int id)
 {
-    sched[id].valid=0;
-    sched[id].BeginFrame=0;
+    gSched[id].valid=0;
+    gSched[id].BeginFrame=0;
     return ERR_NOERROR;
 }
 
 
 //把需要发送的信息放入rtsp.out_buffer中
-int bwrite(char *buffer, unsigned short len, RTSP_buffer * rtsp)
+int bwrite(char *buffer, unsigned short len, RTSP_client * rtsp)
 {
+    
     /*检查是否有缓冲溢出*/
-    if((rtsp->out_size + len) > (int) sizeof(rtsp->out_buffer))
+    if((rtsp->out_size + len) > sizeof(rtsp->out_buffer))
     {
         fprintf(stderr,"bwrite(): not enough free space in out message buffer.\n");
         return ERR_ALLOC;
     }
+    
     /*填充数据*/
     memcpy(&(rtsp->out_buffer[rtsp->out_size]), buffer, len);
     rtsp->out_buffer[rtsp->out_size + len] = '\0';
     rtsp->out_size += len;
 
 #ifdef RTSP_DEBUG
-    printf(">>>>>>>>>>>>>>>>>>>>\n%s\n>>>>>>>>>>>>>>>>>>>>\n",rtsp->out_buffer);
+    printf("<<<<<<<<<<<<<<<<SEND(%d)\n%s\n\n",len,rtsp->out_buffer);
 #endif
     return ERR_NOERROR;
 }
 
-int send_reply(int err, char *addon, RTSP_buffer * rtsp)
+/*
+返回响应
+err: 错误码
+addon : 附件字符串
+
+RTSP版本 状态码 解释 CR LF 
+消息头 CR LF
+CR LF 
+消息体 CR LF 
+
+*/
+int send_reply(int err, char *addon, RTSP_client * rtsp)
 {
     unsigned int len;
-    char *b;
+    char *buf;
     int res;
 
     if(addon != NULL)
@@ -438,21 +457,21 @@ int send_reply(int err, char *addon, RTSP_buffer * rtsp)
     }
 
     /*分配空间*/
-    b = (char *) malloc(len);
-    if(b == NULL)
+    buf = (char *) malloc(len);
+    if(buf == NULL)
     {
         fprintf(stderr,"send_reply(): memory allocation error.\n");
         return ERR_ALLOC;
     }
-    memset(b, 0, len);
+    memset(buf, 0, len);
     /*按照协议格式填充数据*/
-    sprintf(b, "%s %d %s"RTSP_EL"CSeq: %d"RTSP_EL, RTSP_VER, err, get_stat(err), rtsp->rtsp_cseq);
-    strcat(b, RTSP_EL);
+    snprintf(buf,len, "%s %d %s"RTSP_EL"CSeq: %d"RTSP_EL, RTSP_VER, err, get_stat(err), rtsp->rtsp_cseq);
+    strcat(buf, RTSP_EL);
 
     /*将数据写入到缓冲区中*/
-    res = bwrite(b, (unsigned short) strlen(b), rtsp);
+    res = bwrite(buf, (unsigned short) strlen(buf), rtsp);
     //释放空间
-    free(b);
+    free(buf);
 
     return res;
 }

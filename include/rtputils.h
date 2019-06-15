@@ -30,8 +30,14 @@ typedef enum
 	_h264nalu,
 	_mjpeg,
 	_g711		= 0x200,
+	_pcmu       = 0x210,
 }EmRtpPayload;
 	
+typedef enum {
+    FRAME_TYPE_I = 0x101, 
+    FRAME_TYPE_P = 0x102, 
+    FRAME_TYPE_AUDIO = 0x201,
+}FRAME_TYPE;
 
 typedef struct
 {
@@ -98,7 +104,6 @@ typedef struct _tagStRtpHandle
 } StRtpObj, *HndRtp;
 
 
-enum H264_FRAME_TYPE {FRAME_TYPE_I, FRAME_TYPE_P, FRAME_TYPE_B};
 HndRtp RtpCreateOverTcp(int sock, EmRtpPayload emPayload);
 
 HndRtp RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload);
