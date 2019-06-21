@@ -74,7 +74,7 @@
 #define RTSP_method_rcvd    1
 #define RTSP_interlvd_rcvd  2
 
-#define RTSP_BUFFERSIZE     1024
+#define RTSP_BUFFERSIZE     4096
 
 /* Stati della macchina a stati del server rtsp*/
 #define INIT_STATE      0

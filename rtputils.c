@@ -37,7 +37,7 @@ HndRtp RtpCreate(unsigned int u32IP, int s32Port, EmRtpPayload emPayload)
     hRtp = (HndRtp)calloc(1, sizeof(StRtpObj));
     if(NULL == hRtp)
     {
-        printf("Failed to create RTP handle\n");
+        fprintf(stderr,"[%s:%d] calloc error : %s\n",__FUNCTION__,__LINE__,strerror(errno));
         goto cleanup;
     }
 

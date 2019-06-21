@@ -149,7 +149,7 @@ int tcp_listen(unsigned short port)
     /*创建套接字*/
     if((f = socket(AF_INET, SOCK_STREAM, 0))<0)
     {
-        fprintf(stderr, "socket() error in tcp_listen.\n");
+        fprintf(stderr, "socket() error in tcp_listen: %s\n",strerror(errno));
         return -1;
     }
 
@@ -163,7 +163,7 @@ int tcp_listen(unsigned short port)
     /*绑定socket*/
     if(bind(f, (struct sockaddr *)&s, sizeof(s)))
     {
-        fprintf(stderr, "bind() error in tcp_listen");
+        fprintf(stderr, "bind() error in tcp_listen : %s\n",strerror(errno));
         return -1;
     }
 
@@ -324,7 +324,6 @@ int schedule_add(RTP_session *rtp_session)
 {
     int i;
     int ret = ERR_GENERIC;
-    return ret;
     printf("schedule add rtp session is %p\n",rtp_session);
     pthread_mutex_lock(&sc_lock);
     for(i=0; i<MAX_CONNECTION; ++i)
@@ -337,7 +336,6 @@ int schedule_add(RTP_session *rtp_session)
 
             //设置播放动作
             gSched[i].play_action=RtpSend;
-            printf("**adding a schedule object action %s,%d**\n", __FILE__, __LINE__);
             printf("schedule add rtp session is %p\n",gSched[i].rtp_session);
             ret = i;
             break;
@@ -345,7 +343,7 @@ int schedule_add(RTP_session *rtp_session)
     }
     
     pthread_mutex_unlock(&sc_lock);
-    return ;
+    return ret;
 }
 
 int ScheduleInit()
@@ -371,6 +369,7 @@ int ScheduleInit()
         printf("pthread create err : %s\n",strerror(errno));
         return -1;
     }
+    pthread_detach(thread);
 
     return 0;
 }
@@ -402,8 +401,10 @@ void schedule_stop(int id)
 
 int schedule_remove(int id)
 {
+    pthread_mutex_lock(&sc_lock);
     gSched[id].valid=0;
     gSched[id].BeginFrame=0;
+    pthread_mutex_unlock(&sc_lock);
     return ERR_NOERROR;
 }
 

@@ -16,6 +16,7 @@ typedef struct {
     int iput; /* 环形缓冲区的当前放入位置 */
     int iget; /* 缓冲区的当前取出位置 */
     int n; /* 环形缓冲区中的元素总数量 */
+    int bufSize;
 }Ring_t;
 
 Ring_t gRing = {0};
@@ -45,7 +46,7 @@ int ringmalloc(int bufSize)
             goto err;
         }
     }
-
+    gRing.bufSize = bufSize;
     gRing.iput = 0; /* 环形缓冲区的当前放入位置 */
     gRing.iget = 0; /* 缓冲区的当前取出位置 */
     gRing.n = 0;    /* 环形缓冲区中的元素总数量 */
@@ -156,11 +157,15 @@ void ringput(unsigned char *buffer,int size,int encode_type)
     if(gRing.n<NMAX && gRing.init)
     {
         int iput = gRing.iput;
-        memcpy(ringfifo[iput].buffer,buffer,size);
-        ringfifo[iput].size= size;
-        ringfifo[iput].frame_type = encode_type;
-        gRing.iput = addring(iput);
-        gRing.n++;
+        if(size <= gRing.bufSize)
+        {
+            printf("put ring buffer size is %d, type is %d\n",size,encode_type);
+            memcpy(ringfifo[iput].buffer,buffer,size);
+            ringfifo[iput].size= size;
+            ringfifo[iput].frame_type = encode_type;
+            gRing.iput = addring(iput);
+            gRing.n++;
+        }
     }
     pthread_mutex_unlock(&gRing.lock);
     return;

@@ -3,7 +3,7 @@
 #include "rtsputils.h"
 
 #define RTSP_DEBUG 1
-#define RTP_DEFAULT_PORT 50010
+#define RTP_DEFAULT_PORT 5004
 
 typedef enum {
     AV_VIDEO = 0,
@@ -22,6 +22,8 @@ typedef struct rtsp_server_param_ {
 	int (*get_next_frame)(void* thiz, AV_TYPE type, char *buf , int *size);//获取媒体流
 
 } rtsp_server_param_s;
+int rtspInit(rtsp_server_param_s *param);
+int rtspStart();
 
 void PrefsInit();
 void RTP_port_pool_init(int port);

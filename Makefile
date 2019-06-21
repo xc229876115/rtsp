@@ -1,5 +1,5 @@
 HOST	:=
-CC		:= $(HOST)gcc
+CC		?= $(HOST)gcc
 STRIP	?=	$(HOST)strip
 
 INCLUDE	=-I./include/

@@ -17,6 +17,7 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <execinfo.h>  
 
 #include "rtspservice.h"
 #include "rtputils.h"
@@ -64,7 +65,7 @@ void *thread_live_audio(void *arg)
         TUYA_APP_Put_Frame(E_CHANNEL_AUDIO,&pcm_frame);
 #endif 
     
-		PutPCMDataToBuffer(audioBuf,size);
+		//PutPCMDataToBuffer(audioBuf,size);
         int frameRate = AUDIO_FPS;
         int sleepTick = (int)(1000000.0/frameRate);
         usleep(sleepTick);
@@ -203,7 +204,7 @@ void GetSdpDescr(RTSP_client * pRtsp, char *pDescr, char *s8Str)
 
 	getlocaladdr(s8Str);
 
-	GetSdpId(pSdpId);
+//	GetSdpId(pSdpId);
 	memset(pSdpId,0,sizeof(pSdpId));
 	strcpy(pSdpId,"3603282");
 	strcpy(pDescr, "v=0\r\n");	
@@ -266,24 +267,49 @@ void GetSdpDescr(RTSP_client * pRtsp, char *pDescr, char *s8Str)
 		//printf("0\r\n");
 }
 
+void dump(int signo)  
+{  
+    void *buffer[30] = {0};  
+    size_t size;  
+    char **strings = NULL;  
+    size_t i = 0;  
+  
+    size = backtrace(buffer, 30);  
+    fprintf(stdout, "Obtained %zd stack frames.nm\n", size);  
+    strings = backtrace_symbols(buffer, size);  
+    if (strings == NULL)  
+    {  
+        perror("backtrace_symbols.");  
+        exit(EXIT_FAILURE);  
+    }  
+      
+    for (i = 0; i < size; i++)  
+    {  
+        fprintf(stdout, "%s\n", strings[i]);  
+    }  
+    free(strings);  
+    strings = NULL;  
+    exit(0);  
+}  
 
 int main()
 {
 	printf("listen for client connecting...\n");
 	signal(SIGINT, IntHandl);
+//    signal(SIGSEGV, dump) ;
 
     rtsp_server_param_s info;
-    info.get_sdp = GetSdpDescr;
+//    info.get_sdp = GetSdpDescr;
     rtspInit(&info);
 
-//    strcpy(s_raw_path,"./resource/");
-//    pthread_t h264_output_thread;
-//    pthread_create(&h264_output_thread, NULL, thread_live_video, NULL);
-//    pthread_detach(h264_output_thread);
+    strcpy(s_raw_path,"./resource/");
+    pthread_t h264_output_thread;
+    pthread_create(&h264_output_thread, NULL, thread_live_video, NULL);
+    pthread_detach(h264_output_thread);
 
-//    pthread_t pcm_output_thread;
-//    pthread_create(&pcm_output_thread, NULL, thread_live_audio, NULL);
-//    pthread_detach(pcm_output_thread);
+    pthread_t pcm_output_thread;
+    pthread_create(&pcm_output_thread, NULL, thread_live_audio, NULL);
+    pthread_detach(pcm_output_thread);
     
     rtspStart();
     return 0;
